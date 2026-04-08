@@ -1,6 +1,7 @@
 import { hasPinSetup } from './actions'
 import { PinSetupForm, PinVerifyForm } from './pin-forms'
 import { redirect } from 'next/navigation'
+import { LockKeyhole } from 'lucide-react'
 
 export default async function PinPage() {
   const status = await hasPinSetup()
@@ -11,14 +12,16 @@ export default async function PinPage() {
   }
 
   return (
-    <div className="flex h-screen w-full items-center justify-center bg-kely-teal">
-      <div className="w-full max-w-sm bg-kely-white p-8 rounded-lg shadow-md border flex flex-col items-center">
-        <div className="w-16 h-16 bg-kely-teal rounded-full flex items-center justify-center mb-6">
-          <svg className="w-8 h-8 text-kely-green" fill="none" stroke="currentColor" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg">
-            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 15v2m-6 4h12a2 2 0 002-2v-6a2 2 0 00-2-2H6a2 2 0 00-2 2v6a2 2 0 002 2zm10-10V7a4 4 0 00-8 0v4h8z" />
-          </svg>
+    <div className="relative flex min-h-screen w-full items-center justify-center overflow-hidden bg-background px-4 py-10">
+      <div className="pointer-events-none absolute inset-0 bg-[radial-gradient(circle_at_top,_rgba(34,197,94,0.16),_transparent_35%),linear-gradient(180deg,_transparent,_rgba(15,23,42,0.08))]" />
+      <div className="relative flex w-full max-w-sm flex-col items-center rounded-3xl border border-border/70 bg-card/95 p-8 shadow-2xl shadow-black/10 backdrop-blur">
+        <div className="mb-6 flex h-16 w-16 items-center justify-center rounded-2xl bg-kely-green/15 text-kely-green ring-1 ring-kely-green/20">
+          <LockKeyhole className="h-8 w-8" />
         </div>
-        <h1 className="text-xl font-bold mb-6 text-center text-kely-green">Acceso Rápido</h1>
+        <div className="mb-6 text-center">
+          <p className="text-xs font-semibold uppercase tracking-[0.3em] text-kely-green">Acceso rápido</p>
+          <h1 className="mt-2 text-2xl font-bold tracking-tight text-foreground">Protección con PIN</h1>
+        </div>
         {status.setup ? <PinVerifyForm /> : <PinSetupForm />}
       </div>
     </div>

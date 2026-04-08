@@ -82,9 +82,9 @@ export function MensajesTab() {
   }
 
   return (
-    <div className="flex h-[calc(100vh-220px)] flex-col md:flex-row gap-4">
+    <div className="flex min-h-0 flex-1 flex-col gap-4 pb-2 md:flex-row">
       {/* Lista de Chats (Sidebar) */}
-      <div className="w-full md:w-1/3 border-r pr-4 flex flex-col gap-4">
+      <div className="flex w-full flex-col gap-4 md:w-1/3 md:border-r md:pr-4">
         <div className="relative">
           <Search className="absolute left-2.5 top-2.5 h-4 w-4 text-muted-foreground" />
           <input 
@@ -95,7 +95,7 @@ export function MensajesTab() {
             className="flex h-9 w-full rounded-md border border-input bg-transparent px-3 py-1 text-sm shadow-sm transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-kely-green pl-9"
           />
         </div>
-        <div className="flex-1 overflow-y-auto space-y-2 pr-1 custom-scrollbar">
+        <div className="min-h-[220px] flex-1 overflow-y-auto space-y-2 pr-1 custom-scrollbar md:min-h-0">
           {loading ? (
             <p className="text-center text-xs text-muted-foreground mt-4">Cargando...</p>
           ) : conversacionesFiltradas.length === 0 ? (
@@ -133,7 +133,7 @@ export function MensajesTab() {
       </div>
 
       {/* Área de Chat (Main) */}
-      <div className="flex-1 flex flex-col min-h-0 bg-background rounded-lg border">
+      <div className="flex min-h-[420px] flex-1 flex-col rounded-lg border bg-background md:min-h-0">
         {activeConvData ? (
           <>
              <div className="flex justify-between items-center border-b p-4 bg-card rounded-t-lg">
@@ -169,7 +169,7 @@ export function MensajesTab() {
               <div ref={messagesEndRef} />
             </div>
 
-            <div className="p-3 bg-card border-t rounded-b-lg flex gap-2 items-center">
+            <div className="message-input-safe-area flex gap-2 rounded-b-lg border-t bg-card p-3 items-center">
               <input 
                 type="text" 
                 className="flex h-10 w-full rounded-md border border-input bg-transparent px-3 py-2 text-sm focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-kely-green" 

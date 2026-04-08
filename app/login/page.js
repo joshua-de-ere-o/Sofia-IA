@@ -3,6 +3,7 @@
 import { useState } from 'react'
 import { createClient } from '@/lib/supabase'
 import { Button } from '@/components/ui/button'
+import { Mail, MoonStar } from 'lucide-react'
 
 export default function LoginPage() {
   const [email, setEmail] = useState('')
@@ -31,26 +32,51 @@ export default function LoginPage() {
   }
 
   return (
-    <div className="flex h-screen w-full items-center justify-center bg-background">
-      <div className="w-full max-w-md bg-card p-8 rounded-lg shadow-md border">
-        <h1 className="text-2xl font-bold mb-6 text-center text-kely-green">Sistema Dra. Kely</h1>
-        <p className="mb-4 text-center text-sm text-muted-foreground">
-          Ingresa con tu correo electrónico para recibir un enlace mágico de acceso.
-        </p>
-        <form onSubmit={handleLogin} className="flex flex-col gap-4">
-          <input
-            className="flex h-10 w-full rounded-md border border-input bg-transparent px-3 py-2 text-sm focus:outline-none focus:ring-1 focus:ring-ring"
-            type="email"
-            value={email}
-            onChange={(e) => setEmail(e.target.value)}
-            placeholder="kely@example.com"
-            required
-          />
-          <Button type="submit" disabled={loading} className="w-full bg-kely-green hover:bg-kely-green/90 text-white">
+    <div className="relative flex min-h-screen w-full items-center justify-center overflow-hidden bg-background px-4 py-10">
+      <div className="pointer-events-none absolute inset-0 bg-[radial-gradient(circle_at_top,_rgba(34,197,94,0.14),_transparent_35%),linear-gradient(180deg,_transparent,_rgba(15,23,42,0.08))]" />
+      <div className="pointer-events-none absolute inset-x-0 top-0 h-40 bg-gradient-to-b from-kely-green/10 to-transparent" />
+
+      <div className="relative w-full max-w-md rounded-3xl border border-border/70 bg-card/95 p-8 shadow-2xl shadow-black/10 backdrop-blur">
+        <div className="mb-8 flex items-center justify-center">
+          <div className="flex h-14 w-14 items-center justify-center rounded-2xl bg-kely-green/15 text-kely-green ring-1 ring-kely-green/20">
+            <MoonStar className="h-7 w-7" />
+          </div>
+        </div>
+
+        <div className="space-y-2 text-center">
+          <p className="text-xs font-semibold uppercase tracking-[0.3em] text-kely-green">Acceso seguro</p>
+          <h1 className="text-3xl font-bold tracking-tight text-foreground">Sistema Dra. Kely</h1>
+          <p className="text-sm leading-6 text-muted-foreground">
+            Ingresa con tu correo electrónico para recibir un enlace mágico y continuar con tu acceso.
+          </p>
+        </div>
+
+        <form onSubmit={handleLogin} className="mt-8 flex flex-col gap-4">
+          <label className="space-y-2">
+            <span className="text-sm font-medium text-foreground">Correo electrónico</span>
+            <div className="flex h-11 items-center rounded-xl border border-input bg-background/80 px-3 ring-offset-background transition focus-within:ring-2 focus-within:ring-kely-green/40">
+              <Mail className="mr-2 h-4 w-4 text-muted-foreground" />
+              <input
+                className="h-full w-full bg-transparent text-sm outline-none placeholder:text-muted-foreground"
+                type="email"
+                value={email}
+                onChange={(e) => setEmail(e.target.value)}
+                placeholder="kely@example.com"
+                required
+              />
+            </div>
+          </label>
+
+          <Button type="submit" disabled={loading} className="h-11 w-full rounded-xl bg-kely-green text-white shadow-lg shadow-kely-green/20 hover:bg-kely-green/90">
             {loading ? 'Enviando...' : 'Enviar enlace mágico'}
           </Button>
         </form>
-        {message && <p className="mt-4 text-center text-sm text-muted-foreground">{message}</p>}
+
+        {message && (
+          <div className="mt-4 rounded-2xl border border-border/70 bg-background/70 px-4 py-3 text-center text-sm text-muted-foreground">
+            {message}
+          </div>
+        )}
       </div>
     </div>
   )

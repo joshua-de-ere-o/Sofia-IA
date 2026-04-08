@@ -65,7 +65,7 @@ export function DashboardNav() {
       </aside>
 
       {/* Bottom Navigation for Mobile */}
-      <nav className="fixed bottom-0 left-0 right-0 z-50 flex h-16 w-full items-center justify-around border-t bg-card px-2 md:hidden">
+      <nav className="mobile-bottom-nav fixed bottom-0 left-0 right-0 z-50 flex w-full items-center justify-around border-t border-border/80 bg-card/95 px-2 backdrop-blur md:hidden">
         {navItems.map((item) => {
           const Icon = item.icon
           const active = isActive(item.href, item.exact)
@@ -74,12 +74,17 @@ export function DashboardNav() {
               key={item.href} 
               href={item.href} 
               className={cn(
-                "flex flex-col items-center justify-center gap-1 w-full h-full transition-colors",
+                "flex h-full w-full flex-col items-center justify-center gap-1 rounded-2xl px-1 text-[11px] font-medium transition-colors",
                 active ? "text-kely-green" : "text-muted-foreground hover:text-foreground"
               )}
             >
-              <Icon className="h-5 w-5" />
-              <span className="text-[10px] font-medium">{item.label}</span>
+              <div className={cn(
+                "flex h-10 w-10 items-center justify-center rounded-2xl transition-colors",
+                active ? "bg-kely-green/10 text-kely-green" : "text-muted-foreground"
+              )}>
+                <Icon className="h-5 w-5" />
+              </div>
+              <span>{item.label}</span>
             </Link>
           )
         })}

@@ -27,11 +27,11 @@ export function PinSetupForm() {
 
   return (
     <form onSubmit={handleSubmit} className="flex flex-col gap-4 w-full">
-      <p className="text-sm text-center text-foreground/80 mb-2">
+      <p className="mb-2 text-center text-sm leading-6 text-muted-foreground">
         Parece que es tu primer acceso. Crea tu PIN de 4 dígitos para accesos rápidos.
       </p>
       <input
-        className="flex h-12 text-center text-2xl tracking-widest w-full rounded-md border border-input bg-transparent px-3 py-2 outline-none focus:ring-2 focus:ring-kely-green"
+        className="flex h-14 w-full rounded-2xl border border-input bg-background/80 px-3 py-2 text-center text-2xl tracking-[0.45em] outline-none transition focus:ring-2 focus:ring-kely-green/40"
         type="password"
         maxLength={4}
         value={pin}
@@ -39,8 +39,8 @@ export function PinSetupForm() {
         placeholder="----"
         required
       />
-      {error && <p className="text-destructive text-sm font-medium">{error}</p>}
-      <Button type="submit" disabled={loading || pin.length !== 4} className="w-full bg-kely-green hover:bg-kely-green/90 text-white">
+      {error && <p className="text-sm font-medium text-destructive">{error}</p>}
+      <Button type="submit" disabled={loading || pin.length !== 4} className="h-11 w-full rounded-xl bg-kely-green text-white shadow-lg shadow-kely-green/20 hover:bg-kely-green/90">
         {loading ? 'Guardando...' : 'Crear PIN'}
       </Button>
     </form>
@@ -74,11 +74,11 @@ export function PinVerifyForm() {
 
   return (
     <form onSubmit={handleSubmit} className="flex flex-col gap-4 w-full">
-      <p className="text-sm text-center text-foreground/80 mb-2">
+      <p className="mb-2 text-center text-sm leading-6 text-muted-foreground">
         Ingresa tu PIN de 4 dígitos para acceder al CRM.
       </p>
       <input
-        className="flex h-12 text-center text-2xl tracking-widest w-full rounded-md border border-input bg-transparent px-3 py-2 outline-none focus:ring-2 focus:ring-kely-green"
+        className="flex h-14 w-full rounded-2xl border border-input bg-background/80 px-3 py-2 text-center text-2xl tracking-[0.45em] outline-none transition focus:ring-2 focus:ring-kely-green/40"
         type="password"
         maxLength={4}
         value={pin}
@@ -87,8 +87,8 @@ export function PinVerifyForm() {
         required
         autoFocus
       />
-      {error && <p className="text-destructive text-sm text-center font-medium">{error}</p>}
-      <Button type="submit" disabled={loading || pin.length !== 4} className="w-full bg-kely-green hover:bg-kely-green/90 text-white">
+      {error && <p className="text-center text-sm font-medium text-destructive">{error}</p>}
+      <Button type="submit" disabled={loading || pin.length !== 4} className="h-11 w-full rounded-xl bg-kely-green text-white shadow-lg shadow-kely-green/20 hover:bg-kely-green/90">
         {loading ? 'Verificando...' : 'Acceder'}
       </Button>
     </form>

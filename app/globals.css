@@ -53,7 +53,46 @@
   * {
     @apply border-border;
   }
+
+  html {
+    color-scheme: light;
+  }
+
+  html.dark {
+    color-scheme: dark;
+  }
+
   body {
     @apply bg-background text-foreground;
+  }
+}
+
+@layer utilities {
+  .mobile-content-shell {
+    padding-bottom: calc(5.5rem + env(safe-area-inset-bottom, 0px));
+  }
+
+  .mobile-bottom-nav {
+    height: calc(4.75rem + env(safe-area-inset-bottom, 0px));
+    padding-bottom: env(safe-area-inset-bottom, 0px);
+  }
+
+  .message-input-safe-area {
+    padding-bottom: calc(0.75rem + env(safe-area-inset-bottom, 0px));
+  }
+
+  @media (min-width: 768px) {
+    .mobile-content-shell {
+      padding-bottom: 0;
+    }
+
+    .mobile-bottom-nav {
+      height: 0;
+      padding-bottom: 0;
+    }
+
+    .message-input-safe-area {
+      padding-bottom: 0.75rem;
+    }
   }
 }

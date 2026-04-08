@@ -12,7 +12,7 @@ import { getSystemConfig, updateSystemConfig } from '../actions'
 import { createClient } from '@/lib/supabase'
 
 export function ConfigTab() {
-  const { theme, setTheme } = useTheme()
+  const { theme, setTheme, resolvedTheme } = useTheme()
   const [config, setConfig] = useState(null)
   const [loading, setLoading] = useState(true)
   const [savingSettings, setSavingSettings] = useState(false)
@@ -312,9 +312,12 @@ export function ConfigTab() {
               <CardTitle className="text-base font-semibold flex items-center gap-2">
                 <Settings2 className="h-5 w-5" /> Configuración de UI
               </CardTitle>
+              <CardDescription className="text-xs">
+                Elige si quieres ver el CRM en claro, oscuro o siguiendo el tema del dispositivo.
+              </CardDescription>
             </CardHeader>
-            <CardContent>
-               <div className="flex gap-2">
+            <CardContent className="space-y-3">
+               <div className="flex flex-wrap gap-2">
                   <Button
                     variant={theme === 'light' ? 'default' : 'outline'}
                     size="sm"
@@ -331,7 +334,18 @@ export function ConfigTab() {
                   >
                     <Moon className="w-4 h-4 mr-2" /> Oscuro
                   </Button>
+                  <Button
+                    variant={theme === 'system' ? 'default' : 'outline'}
+                    size="sm"
+                    onClick={() => setTheme('system')}
+                    className={theme === 'system' ? 'bg-kely-green hover:bg-kely-green/90 text-white' : ''}
+                  >
+                    <Settings2 className="w-4 h-4 mr-2" /> Sistema
+                  </Button>
                </div>
+               <p className="text-xs text-muted-foreground">
+                 Tema activo: <span className="font-medium text-foreground capitalize">{theme === 'system' ? `Sistema (${resolvedTheme})` : theme}</span>
+               </p>
             </CardContent>
           </Card>
 

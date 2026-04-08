@@ -17,11 +17,11 @@ export default async function DashboardLayout({ children }) {
       <DashboardNav />
 
       {/* Main Content Area */}
-      <main className="flex-1 overflow-y-auto w-full pb-20 md:pb-0">
+      <main className="mobile-content-shell flex-1 overflow-y-auto w-full md:pb-0">
         <header className="flex h-14 md:hidden items-center border-b bg-card px-4 sticky top-0 z-10 shadow-sm">
           <span className="text-lg font-bold text-kely-green">Dra. Kely CRM</span>
         </header>
-        <div className="p-4 md:p-8 max-w-6xl mx-auto h-full">
+        <div className="mx-auto h-full max-w-6xl p-4 md:p-8">
           {children}
         </div>
       </main>
