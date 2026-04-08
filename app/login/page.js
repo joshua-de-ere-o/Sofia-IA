@@ -15,12 +15,10 @@ export default function LoginPage() {
     e.preventDefault()
     setLoading(true)
     setMessage('')
-    const appUrl = (process.env.NEXT_PUBLIC_APP_URL || location.origin).replace(/\/$/, '')
-    
     const { error } = await supabase.auth.signInWithOtp({
       email,
       options: {
-        emailRedirectTo: `${appUrl}/auth/callback`,
+        emailRedirectTo: `${location.origin}/auth/callback`,
       },
     })
 
