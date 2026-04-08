@@ -88,6 +88,18 @@ export function DashboardNav() {
             </Link>
           )
         })}
+
+        <form action="/auth/signout" method="post" className="flex h-full w-full">
+          <button
+            type="submit"
+            className="flex h-full w-full flex-col items-center justify-center gap-1 rounded-2xl px-1 text-[11px] font-medium text-destructive transition-colors hover:bg-destructive/5"
+          >
+            <div className="flex h-10 w-10 items-center justify-center rounded-2xl bg-destructive/10 text-destructive transition-colors">
+              <LogOut className="h-5 w-5" />
+            </div>
+            <span>Cerrar</span>
+          </button>
+        </form>
       </nav>
     </>
   )
