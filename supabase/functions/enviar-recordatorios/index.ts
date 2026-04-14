@@ -10,6 +10,23 @@ function nowGuayaquil(): Date {
   return new Date();
 }
 
+/** Formatea un Date como fecha/hora locales de Guayaquil (UTC-5) para comparar
+ * contra las columnas citas.fecha (date) y citas.hora (time) que no llevan TZ. */
+function toGuayaquilParts(d: Date): { fecha: string; hora: string } {
+  const fmt = new Intl.DateTimeFormat("en-CA", {
+    timeZone: "America/Guayaquil",
+    year: "numeric", month: "2-digit", day: "2-digit",
+    hour: "2-digit", minute: "2-digit", second: "2-digit",
+    hourCycle: "h23",
+  });
+  const parts = fmt.formatToParts(d);
+  const get = (t: string) => parts.find((p) => p.type === t)?.value ?? "";
+  return {
+    fecha: `${get("year")}-${get("month")}-${get("day")}`,
+    hora: `${get("hour")}:${get("minute")}:${get("second")}`,
+  };
+}
+
 /** Envía un mensaje de WhatsApp vía YCloud */
 async function sendWhatsApp(to: string, text: string): Promise<void> {
   const apiKey = Deno.env.get("YCLOUD_API_KEY");
@@ -162,7 +179,7 @@ async function generarTextosBatch(requests: BatchRequest[]): Promise<TextoBatch[
 // Lógica de Recordatorios
 // ──────────────────────────────────────────────
 
-const MODEL = "claude-haiku-4-5-20250315";
+const MODEL = "claude-haiku-4-5-20251001";
 const SYSTEM_RECORDATORIO = `Eres Sofía, la asistente virtual de la Dra. Kely León, nutricionista clínica y deportiva en Quito, Ecuador. 
 Redacta UN SOLO mensaje de WhatsApp en español (Ecuador), cálido y profesional. 
 No uses asteriscos ni emojis excesivos. Máximo 3 líneas.`;
@@ -353,9 +370,9 @@ async function procesarNoShows(supabase: ReturnType<typeof createClient>): Promi
   // 15 minutos de gracia
   const limiteGracia = new Date(ahora.getTime() - 15 * 60 * 1000);
 
-  // Formateamos fecha y hora en el servidor para comparar con columnas date/time separadas
-  const fechaLimite = limiteGracia.toISOString().split("T")[0]; // YYYY-MM-DD
-  const horaLimite = limiteGracia.toISOString().split("T")[1].slice(0, 8); // HH:MM:SS
+  // citas.fecha/hora están en hora local de Guayaquil (UTC-5) sin TZ.
+  // toISOString() daría UTC y desfasaría la comparación 5 horas.
+  const { fecha: fechaLimite, hora: horaLimite } = toGuayaquilParts(limiteGracia);
 
   // Citas confirmadas cuya fecha+hora ya superó el límite de gracia
   const { data: noShows, error } = await supabase

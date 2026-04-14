@@ -3,9 +3,11 @@
  * Soporta Claude, OpenAI y Gemini con interfaz unificada.
  */
 
+import { createClient } from "jsr:@supabase/supabase-js";
+
 const PROVIDERS: Record<string, { defaultModel: string; endpoint: string }> = {
   anthropic: {
-    defaultModel: "claude-haiku-4-5-20250315",
+    defaultModel: "claude-haiku-4-5-20251001",
     endpoint: "https://api.anthropic.com/v1/messages",
   },
   openai: {
@@ -187,11 +189,33 @@ export function createModelAdapter(provider: string, apiKey: string, model?: str
 }
 
 /**
- * Lee AI_PROVIDER y API keys del entorno Deno y retorna un adaptador listo.
+ * Lee AI_PROVIDER y API keys primero desde la tabla `configuracion`, con fallback
+ * a variables de entorno. Retorna un adaptador listo.
  */
-export function getModelAdapter() {
-  const provider = Deno.env.get("AI_PROVIDER") || "anthropic";
-  const keyMap: Record<string, string | undefined> = {
+export async function getModelAdapter() {
+  let cfgProvider: string | undefined;
+  let cfgKey: string | undefined;
+
+  try {
+    const supabaseUrl = Deno.env.get("SUPABASE_URL") ?? "";
+    const supabaseKey =
+      Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") ?? Deno.env.get("SUPABASE_ANON_KEY") ?? "";
+    if (supabaseUrl && supabaseKey) {
+      const supabase = createClient(supabaseUrl, supabaseKey);
+      const { data } = await supabase
+        .from("configuracion")
+        .select("ai_provider, ai_api_key")
+        .limit(1)
+        .single();
+      cfgProvider = data?.ai_provider ?? undefined;
+      cfgKey = data?.ai_api_key ?? undefined;
+    }
+  } catch (err) {
+    console.warn("[model-adapter] No se pudo leer configuracion, usando env vars:", err);
+  }
+
+  const provider = cfgProvider || Deno.env.get("AI_PROVIDER") || "anthropic";
+  const envKeyMap: Record<string, string | undefined> = {
     anthropic: Deno.env.get("ANTHROPIC_API_KEY"),
     openai: Deno.env.get("OPENAI_API_KEY"),
     gemini: Deno.env.get("GEMINI_API_KEY"),
@@ -201,7 +225,7 @@ export function getModelAdapter() {
     openai: Deno.env.get("OPENAI_MODEL"),
     gemini: Deno.env.get("GEMINI_MODEL"),
   };
-  const apiKey = keyMap[provider];
+  const apiKey = cfgKey || envKeyMap[provider];
   if (!apiKey) throw new Error(`API key no configurada para proveedor: ${provider}`);
   return createModelAdapter(provider, apiKey, modelMap[provider]);
 }

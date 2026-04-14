@@ -120,7 +120,7 @@ Deno.serve(async (req: Request) => {
     history.push(userMessage);
 
     // 3. Preparar el Adaptador de Modelo (lee directamente de Deno.env)
-    const adapter = getModelAdapter();
+    const adapter = await getModelAdapter();
 
     // 4. Iniciar el Loop Agéntico (máximo 5 iteraciones de herramientas para evitar loops infinitos)
     let agentFinished = false;
@@ -204,16 +204,22 @@ Deno.serve(async (req: Request) => {
       
       await supabase
         .from('conversaciones')
-        .update({ 
-          mensajes_raw: [], 
-          historial_resumido: newSummary 
+        .update({
+          mensajes_raw: [],
+          historial_resumido: newSummary,
+          ultima_actividad: new Date().toISOString(),
+          reactivacion_enviada: false
         })
         .eq('id', conv.id);
 
     } else {
       await supabase
         .from('conversaciones')
-        .update({ mensajes_raw: history })
+        .update({
+          mensajes_raw: history,
+          ultima_actividad: new Date().toISOString(),
+          reactivacion_enviada: false
+        })
         .eq('id', conv.id);
     }
 

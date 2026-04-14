@@ -71,7 +71,7 @@ export async function executeConsultarDisponibilidad(args: any): Promise<string>
       .select('fecha, hora, estado')
       .gte('fecha', fecha_inicio)
       .lte('fecha', fecha_fin)
-      .not('estado', 'in', '("cancelada", "no_show")');
+      .not('estado', 'in', '(cancelada,no_show)');
       
     if (errorCitas) throw errorCitas;
 
@@ -168,13 +168,17 @@ export async function executeAgendarCita(args: any, context: any): Promise<strin
     const supabase = getSupabase();
     const { conversacion_id } = context ?? {};
 
+    // Normalizar hora a HH:MM:SS — el LLM puede enviar "9:00" o "09:00"
+    const [hPart, mPart] = String(hora).split(':');
+    const horaNorm = `${hPart.padStart(2, '0')}:${(mPart ?? '00').padStart(2, '0')}:00`;
+
     // 1. Verificar si el slot no fue ocupado en el último segundo
     const { data: slotCheck } = await supabase
       .from('citas')
       .select('id')
       .eq('fecha', fecha)
-      .eq('hora', hora + ':00') // Las DBs suelen guardar esto con segundos (00)
-      .not('estado', 'in', '("cancelada", "no_show")');
+      .eq('hora', horaNorm)
+      .not('estado', 'in', '(cancelada,no_show)');
 
     if (slotCheck && slotCheck.length > 0) {
       return JSON.stringify({ 
@@ -226,7 +230,7 @@ export async function executeAgendarCita(args: any, context: any): Promise<strin
         paciente_id: pacienteId,
         servicio: servicio_id,
         fecha: fecha,
-        hora: hora,
+        hora: horaNorm,
         duracion_min: 30,
         estado: estadoCita,
         modalidad: modalidad,
@@ -450,13 +454,17 @@ export async function executeReprogramarCita(args: any, context: any): Promise<s
     }
 
     // Reprogramar en DB
+    // Normalizar nueva_hora a HH:MM:SS
+    const [hPart, mPart] = String(nueva_hora).split(':');
+    const nuevaHoraNorm = `${hPart.padStart(2, '0')}:${(mPart ?? '00').padStart(2, '0')}:00`;
+
     // Primero verificar slot libre
     const { data: slotCheck } = await supabase
       .from('citas')
       .select('id')
       .eq('fecha', nueva_fecha)
-      .eq('hora', nueva_hora + ':00')
-      .not('estado', 'in', '("cancelada", "no_show")');
+      .eq('hora', nuevaHoraNorm)
+      .not('estado', 'in', '(cancelada,no_show)');
 
     if (slotCheck && slotCheck.length > 0) {
       return JSON.stringify({ error: "El nuevo slot ya está ocupado. Intenta con otra fecha/hora." });
@@ -464,7 +472,7 @@ export async function executeReprogramarCita(args: any, context: any): Promise<s
 
     await supabase
       .from("citas")
-      .update({ fecha: nueva_fecha, hora: nueva_hora })
+      .update({ fecha: nueva_fecha, hora: nuevaHoraNorm })
       .eq("id", cita.id);
 
     return JSON.stringify({ success: true, mensaje_interno: "Cita reprogramada exitosamente. Confírmaselo al paciente." });
