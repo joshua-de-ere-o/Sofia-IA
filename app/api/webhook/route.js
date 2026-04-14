@@ -1,4 +1,5 @@
 import { NextResponse } from "next/server";
+import crypto from "crypto";
 import { processPaymentImage } from "../../../lib/payments";
 import { runPreFilter } from "../../../lib/pre-filter";
 import { sendWhatsAppMessage } from "../../../lib/ycloud";
@@ -6,9 +7,27 @@ import { sendWhatsAppMessage } from "../../../lib/ycloud";
 export async function POST(req) {
   try {
     const signature = req.headers.get("ycloud-webhook-signature");
-    // TODO: En Fase 2 avanzada, implementar la verificación de la firma de YCloud.
+    const rawBody = await req.text();
     
-    const body = await req.json();
+    // Verificación de firma criptográfica
+    const secret = process.env.YCLOUD_WEBHOOK_SECRET;
+    if (!secret) {
+        console.warn("WARNING: YCLOUD_WEBHOOK_SECRET no está configurado. Se omite validación de firma para desarrollo local.");
+    } else if (!signature) {
+        console.error("401 Unauthorized: Falta YCloud webhook signature.");
+        return new NextResponse("Unauthorized", { status: 401 });
+    } else {
+        const expectedSignature = crypto.createHmac("sha256", secret).update(rawBody, "utf8").digest("hex");
+        const sigBuffer = Buffer.from(signature);
+        const expectedBuffer = Buffer.from(expectedSignature);
+        
+        if (sigBuffer.length !== expectedBuffer.length || !crypto.timingSafeEqual(sigBuffer, expectedBuffer)) {
+            console.error("401 Unauthorized: Firma de YCloud inválida.");
+            return new NextResponse("Unauthorized", { status: 401 });
+        }
+    }
+    
+    const body = JSON.parse(rawBody);
     
     // Asumimos formato estándar de meta/YCloud
     const message = body?.message; 

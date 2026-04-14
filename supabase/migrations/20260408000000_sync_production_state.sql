@@ -62,7 +62,7 @@ SELECT cron.schedule(
     url     := 'https://azrftqhescniopmleolm.supabase.co/functions/v1/enviar-recordatorios',
     headers := json_build_object(
       'Content-Type', 'application/json',
-      'x-cron-secret', 'kelly-cron-secret-2024'
+      'x-cron-secret', 'kelly-cron-secret-2026'
     )::jsonb,
     body    := '{}'::jsonb
   );

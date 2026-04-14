@@ -6,7 +6,7 @@ import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Badge } from '@/components/ui/badge'
-import { Server, Activity, ShieldCheck, Sun, Moon, UploadCloud, Brain, Settings2, ShieldAlert, Landmark, CalendarOff, Trash2, Plus } from 'lucide-react'
+import { Server, Activity, ShieldCheck, Sun, Moon, UploadCloud, Brain, Settings2, ShieldAlert, Landmark, CalendarOff, Trash2, Plus, Eye, EyeOff } from 'lucide-react'
 import { useTheme } from '@/lib/theme-provider'
 import { getSystemConfig, updateSystemConfig } from '../actions'
 import { createClient } from '@/lib/supabase'
@@ -20,6 +20,7 @@ export function ConfigTab() {
   // Estados Locales para el formulario
   const [aiProvider, setAiProvider] = useState('anthropic')
   const [aiApiKey, setAiApiKey] = useState('')
+  const [showApiKey, setShowApiKey] = useState(false)
   const [whitelistActiva, setWhitelistActiva] = useState(false)
   const [whitelistInput, setWhitelistInput] = useState('')
   
@@ -250,6 +251,26 @@ export function ConfigTab() {
                   <option value="gemini">gemini</option>
                   <option value="openai">openai</option>
                 </select>
+              </div>
+              <div className="space-y-1">
+                <Label className="text-xs">API Key del proveedor IA</Label>
+                <div className="relative">
+                  <Input 
+                    type={showApiKey ? "text" : "password"} 
+                    value={aiApiKey} 
+                    onChange={e => setAiApiKey(e.target.value)} 
+                    placeholder="Introduce tu API Key" 
+                    className="h-9 text-sm pr-9" 
+                  />
+                  <Button 
+                    variant="ghost" 
+                    size="icon" 
+                    className="absolute right-0 top-0 h-9 w-9 text-muted-foreground hover:text-foreground"
+                    onClick={() => setShowApiKey(!showApiKey)}
+                  >
+                    {showApiKey ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
+                  </Button>
+                </div>
               </div>
             </CardContent>
             <CardFooter>

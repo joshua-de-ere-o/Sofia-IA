@@ -131,11 +131,16 @@ Deno.serve(async (req: Request) => {
       iteration++;
       console.log(`[Agent-Runner] Iteración ${iteration}...`);
 
+      const isConfirmation = history.length > 0 && history[history.length - 1].role === 'tool';
+      const maxTokensToUse = isConfirmation 
+        ? (MODEL_CONFIG.max_tokens_confirmation || 100) 
+        : (MODEL_CONFIG.max_tokens_normal || 300);
+
       const { text: llmText, toolCalls } = await adapter.chat({
         systemPrompt: SYSTEM_PROMPT, 
         messages: history, 
         tools: TOOLS, 
-        maxTokens: MODEL_CONFIG.max_tokens_normal || 300
+        maxTokens: maxTokensToUse
       });
 
       // Si hay texto dirigido al usuario, lo guardamos y lo enviamos a WA

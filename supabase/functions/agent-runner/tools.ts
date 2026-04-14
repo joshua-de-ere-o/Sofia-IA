@@ -229,7 +229,9 @@ export async function executeAgendarCita(args: any, context: any): Promise<strin
         hora: hora,
         duracion_min: 30,
         estado: estadoCita,
-        modalidad: modalidad
+        modalidad: modalidad,
+        motivo: motivo,
+        zona: zona
       })
       .select()
       .single();

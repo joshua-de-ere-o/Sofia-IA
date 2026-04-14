@@ -198,7 +198,7 @@ export const TOOLS = [
         zona: { type: "string", enum: ["sur", "norte", "virtual", "valle", "domicilio"], description: "Zona." },
         motivo: { type: "string", description: "Motivo o necesidad del paciente." },
       },
-      required: ["paciente_nombre", "paciente_telefono", "servicio_id", "fecha", "hora", "modalidad", "zona"],
+      required: ["paciente_nombre", "paciente_telefono", "servicio_id", "fecha", "hora", "modalidad", "zona", "motivo"],
     },
   },
   {
