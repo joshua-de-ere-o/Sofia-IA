@@ -8,6 +8,7 @@ import { Label } from '@/components/ui/label'
 import { Badge } from '@/components/ui/badge'
 import { Server, Activity, ShieldCheck, Sun, Moon, UploadCloud, Brain, Settings2, ShieldAlert, Landmark, CalendarOff, Trash2, Plus, Eye, EyeOff } from 'lucide-react'
 import { useTheme } from '@/lib/theme-provider'
+import { toggleWhitelistActivaPersisted } from '@/lib/whitelist-toggle.mjs'
 import { getSystemConfig, updateSystemConfig } from '../actions'
 import { createClient } from '@/lib/supabase'
 
@@ -23,6 +24,7 @@ export function ConfigTab() {
   const [showApiKey, setShowApiKey] = useState(false)
   const [whitelistActiva, setWhitelistActiva] = useState(false)
   const [whitelistInput, setWhitelistInput] = useState('')
+  const [savingWhitelistToggle, setSavingWhitelistToggle] = useState(false)
   
   // Datos Bancarios
   const [banco, setBanco] = useState('')
@@ -85,6 +87,28 @@ export function ConfigTab() {
     }
     await updateSystemConfig(updates)
     setSavingSettings(false)
+  }
+
+  const handleToggleWhitelistActiva = async () => {
+    if (savingWhitelistToggle) return
+
+    const currentValue = whitelistActiva
+    setWhitelistActiva(!currentValue) // optimista
+    setSavingWhitelistToggle(true)
+
+    try {
+      const res = await toggleWhitelistActivaPersisted({
+        currentValue,
+        updateFn: updateSystemConfig,
+      })
+
+      if (!res?.ok) {
+        console.error('Error actualizando whitelist_activa:', res?.error)
+        setWhitelistActiva(currentValue)
+      }
+    } finally {
+      setSavingWhitelistToggle(false)
+    }
   }
 
   const handleSaveBank = async () => {
@@ -302,9 +326,10 @@ export function ConfigTab() {
                     variant={whitelistActiva ? 'default' : 'outline'} 
                     size="sm" 
                     className={whitelistActiva ? "bg-kely-green text-white hover:bg-kely-green/90" : ""}
-                    onClick={() => setWhitelistActiva(!whitelistActiva)}
+                    onClick={handleToggleWhitelistActiva}
+                    disabled={savingWhitelistToggle}
                   >
-                    {whitelistActiva ? 'Activada' : 'Desactivada'}
+                    {savingWhitelistToggle ? 'Guardando…' : (whitelistActiva ? 'Activada' : 'Desactivada')}
                   </Button>
                 </div>
               </div>
