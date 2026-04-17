@@ -1,9 +1,9 @@
 import { createServerSupabaseClient } from '@/lib/supabase-server'
 import { revalidatePath } from 'next/cache'
 import { cookies } from 'next/headers'
-import { NextResponse } from 'next/server'
+import { redirect } from 'next/navigation'
 
-export async function POST(req) {
+export async function POST() {
   // Solo se ejecuta si existen las variables de entorno para evitar crashear el preview mode
   if (process.env.NEXT_PUBLIC_SUPABASE_URL) {
     const supabase = await createServerSupabaseClient()
@@ -15,10 +15,7 @@ export async function POST(req) {
   cookieStore.delete('kely_pin_unlocked')
 
   revalidatePath('/', 'layout')
-  
-  // Redirigir a login
-  const requestUrl = new URL(req.url)
-  return NextResponse.redirect(`${requestUrl.origin}/login`, {
-    status: 302,
-  })
+
+  // redirect() de next/navigation preserva las mutaciones de cookies (signOut + delete)
+  redirect('/login')
 }

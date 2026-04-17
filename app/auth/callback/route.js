@@ -1,12 +1,18 @@
 import { NextResponse } from 'next/server'
 import { createServerClient } from '@supabase/ssr'
 
+// Valida que next sea una ruta interna segura (evita open-redirect)
+function safeNext(raw) {
+  if (!raw || typeof raw !== 'string') return '/dashboard'
+  if (!raw.startsWith('/')) return '/dashboard'
+  if (raw.startsWith('//')) return '/dashboard'
+  return raw
+}
+
 export async function GET(request) {
   const { searchParams, origin } = new URL(request.url)
   const code = searchParams.get('code')
-  
-  // Si enviamos a la ruta next (despues de autenticarse magic link)
-  const next = searchParams.get('next') ?? '/dashboard'
+  const next = safeNext(searchParams.get('next'))
 
   // Crear la respuesta de redirección primero para poder adjuntarle las cookies de sesión
   const response = NextResponse.redirect(`${origin}${next}`)
@@ -32,6 +38,9 @@ export async function GET(request) {
 
     const { error } = await supabase.auth.exchangeCodeForSession(code)
     if (!error) {
+      // Limpiar cookie del PIN para que el nuevo usuario valide su propio PIN
+      // (importante si cambió de usuario: Joshua ↔ Dra. Kelly en el mismo navegador)
+      response.cookies.delete('kely_pin_unlocked')
       return response
     }
 

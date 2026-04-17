@@ -36,17 +36,27 @@ export async function middleware(request) {
 
   const { data: { user } } = await supabase.auth.getUser()
 
+  // Helper: crear redirect que preserva las cookies de sesión actualizadas por getUser()
+  function redirectWithCookies(url) {
+    const redirectResponse = NextResponse.redirect(url)
+    // Copiar cookies de sesión actualizadas al redirect para no perderlas
+    response.cookies.getAll().forEach((cookie) => {
+      redirectResponse.cookies.set(cookie.name, cookie.value)
+    })
+    return redirectResponse
+  }
+
   // Proteger la ruta de dashboard si no hay usuario
   if (request.nextUrl.pathname.startsWith('/dashboard') && !user) {
-    return NextResponse.redirect(new URL('/login', request.url))
+    return redirectWithCookies(new URL('/login', request.url))
   }
-  
+
   // Proteger el acceso de los empleados/doctor con el PIN rápido
   if (request.nextUrl.pathname.startsWith('/dashboard')) {
     const pinUnlocked = request.cookies.get('kely_pin_unlocked')
     // Si no está la cookie desbloqueada, redirigir al pin pad
     if (!pinUnlocked) {
-      return NextResponse.redirect(new URL('/pin', request.url))
+      return redirectWithCookies(new URL('/pin', request.url))
     }
   }
 
@@ -54,7 +64,7 @@ export async function middleware(request) {
   if ((request.nextUrl.pathname === '/login' || request.nextUrl.pathname === '/pin') && user) {
     const pinUnlocked = request.cookies.get('kely_pin_unlocked')
     if (pinUnlocked) {
-      return NextResponse.redirect(new URL('/dashboard', request.url))
+      return redirectWithCookies(new URL('/dashboard', request.url))
     }
   }
 
@@ -63,6 +73,6 @@ export async function middleware(request) {
 
 export const config = {
   matcher: [
-    '/((?!_next/static|_next/image|favicon.ico|api/webhook).*)',
+    '/((?!_next/static|_next/image|favicon.ico|api/webhook|auth/callback).*)',
   ],
 }

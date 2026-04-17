@@ -15,6 +15,11 @@ export default function LoginPage() {
     e.preventDefault()
     setLoading(true)
     setMessage('')
+
+    // Limpieza preventiva: elimina residuos de intentos previos (code_verifier stale,
+    // tokens viejos) para que el nuevo signInWithOtp genere un estado PKCE limpio.
+    await supabase.auth.signOut({ scope: 'local' })
+
     const { error } = await supabase.auth.signInWithOtp({
       email,
       options: {
