@@ -3,17 +3,19 @@
 import { useState, useEffect, useRef, useCallback, useMemo } from 'react'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
-import { Search, UserCheck, MessageSquareText, Send } from 'lucide-react'
+import { Search, UserCheck, MessageSquareText, Send, Bot, Hand, UserX } from 'lucide-react'
 import { createClient } from '@/lib/supabase'
-import { sendManualMessage, resolveHandoff } from '../actions'
+import { sendManualMessage, resolveHandoff, setConversacionMode } from '../actions'
 
 export function MensajesTab() {
   const [conversaciones, setConversaciones] = useState([])
   const [selectedConv, setSelectedConv] = useState(null)
   const [searchQuery, setSearchQuery] = useState('')
   const [loading, setLoading] = useState(true)
+  const [showLoading, setShowLoading] = useState(false)
   const [inputText, setInputText] = useState('')
   const [sending, setSending] = useState(false)
+  const [changingMode, setChangingMode] = useState(false)
   const messagesEndRef = useRef(null)
 
   const supabase = useMemo(() => createClient(), [])
@@ -46,6 +48,16 @@ export function MensajesTab() {
   }, [fetchConversaciones, supabase])
 
   useEffect(() => {
+    if (!loading) {
+      setShowLoading(false)
+      return
+    }
+
+    const t = setTimeout(() => setShowLoading(true), 250)
+    return () => clearTimeout(t)
+  }, [loading])
+
+  useEffect(() => {
     if (messagesEndRef.current) {
       messagesEndRef.current.scrollIntoView({ behavior: 'smooth' })
     }
@@ -62,6 +74,27 @@ export function MensajesTab() {
     if (!activeConvData) return
     await resolveHandoff(activeConvData.id)
     fetchConversaciones()
+  }
+
+  const handleChangeMode = async (nuevoModo) => {
+    if (!activeConvData || changingMode) return
+    if (nuevoModo === 'personal') {
+      const ok = window.confirm(
+        'Cambiar a PERSONAL bloqueará este número permanentemente. Sofía no volverá a responder. ¿Continuar?'
+      )
+      if (!ok) return
+    }
+    setChangingMode(true)
+    try {
+      const res = await setConversacionMode(activeConvData.id, nuevoModo)
+      if (res?.error) {
+        console.error('Error cambiando modo:', res.error)
+        alert('Error: ' + res.error)
+      }
+      await fetchConversaciones()
+    } finally {
+      setChangingMode(false)
+    }
   }
 
   const handleSendMessage = async () => {
@@ -97,7 +130,7 @@ export function MensajesTab() {
         </div>
         <div className="min-h-[220px] flex-1 overflow-y-auto space-y-2 pr-1 custom-scrollbar md:min-h-0">
           {loading ? (
-            <p className="text-center text-xs text-muted-foreground mt-4">Cargando...</p>
+            <p className="text-center text-xs text-muted-foreground mt-4">{showLoading ? 'Cargando...' : null}</p>
           ) : conversacionesFiltradas.length === 0 ? (
             <p className="text-center text-xs text-muted-foreground mt-4">No se encontraron conversaciones.</p>
           ) : (
@@ -122,9 +155,17 @@ export function MensajesTab() {
                     </span>
                   </div>
                   <p className="text-xs text-muted-foreground line-clamp-1">{ultimoMensaje}</p>
-                  {conv.handoff_activo && (
-                    <Badge variant="destructive" className="mt-2 text-[10px] px-1.5 py-0">Requiere Atención</Badge>
-                  )}
+                  <div className="flex flex-wrap gap-1 mt-2">
+                    {conv.handoff_activo && (
+                      <Badge variant="destructive" className="text-[10px] px-1.5 py-0">Requiere Atención</Badge>
+                    )}
+                    {conv.mode === 'personal' && (
+                      <Badge variant="outline" className="text-[10px] px-1.5 py-0 border-destructive text-destructive">Personal</Badge>
+                    )}
+                    {conv.mode === 'manual' && (
+                      <Badge variant="outline" className="text-[10px] px-1.5 py-0 border-orange-500 text-orange-600">Manual</Badge>
+                    )}
+                  </div>
                 </div>
               )
             })
@@ -136,20 +177,63 @@ export function MensajesTab() {
       <div className="flex min-h-[420px] flex-1 flex-col rounded-lg border bg-background md:min-h-0">
         {activeConvData ? (
           <>
-             <div className="flex justify-between items-center border-b p-4 bg-card rounded-t-lg">
+             <div className="flex flex-wrap justify-between items-center gap-3 border-b p-4 bg-card rounded-t-lg">
               <div>
                 <h3 className="font-semibold">{activeConvData.paciente?.nombre || activeConvData.telefono_contacto}</h3>
                 <p className="text-xs text-muted-foreground">
-                  {activeConvData.estado === 'activa' && !activeConvData.handoff_activo 
-                    ? 'Sofía está atendiéndolo (Agente Activo)'
-                    : activeConvData.handoff_activo ? 'Esperando respuesta manual' : 'Chat inactivo'}
+                  {activeConvData.mode === 'personal'
+                    ? 'Modo PERSONAL — Sofía no responde'
+                    : activeConvData.mode === 'manual'
+                      ? 'Modo MANUAL — Sofía silenciada temporalmente'
+                      : activeConvData.estado === 'activa' && !activeConvData.handoff_activo
+                        ? 'Sofía está atendiéndolo (Agente Activo)'
+                        : activeConvData.handoff_activo ? 'Esperando respuesta manual' : 'Chat inactivo'}
                 </p>
               </div>
-              {activeConvData.handoff_activo && (
-                 <Button size="sm" variant="outline" onClick={handleRetomar} className="text-kely-green border-kely-green hover:bg-kely-teal hover:text-kely-green dark:hover:bg-kely-teal/20">
-                  <UserCheck className="w-4 h-4 mr-2" /> Marcar Resuelto
-                </Button>
-              )}
+
+              <div className="flex items-center gap-2">
+                <div className="inline-flex rounded-md border bg-muted/30 p-0.5">
+                  {[
+                    { key: 'auto', label: 'AUTO', icon: Bot },
+                    { key: 'manual', label: 'MANUAL', icon: Hand },
+                    { key: 'personal', label: 'PERSONAL', icon: UserX },
+                  ].map(({ key, label, icon: Icon }) => {
+                    const active = (activeConvData.mode || 'auto') === key
+                    return (
+                      <button
+                        key={key}
+                        onClick={() => handleChangeMode(key)}
+                        disabled={changingMode || active}
+                        className={`flex items-center gap-1 px-2.5 py-1 text-[11px] font-medium rounded transition-colors ${
+                          active
+                            ? key === 'personal'
+                              ? 'bg-destructive text-destructive-foreground shadow-sm'
+                              : key === 'manual'
+                                ? 'bg-orange-500 text-white shadow-sm'
+                                : 'bg-kely-green text-white shadow-sm'
+                            : 'text-muted-foreground hover:text-foreground hover:bg-background'
+                        } ${changingMode ? 'opacity-60 cursor-not-allowed' : ''}`}
+                        title={
+                          key === 'auto'
+                            ? 'Sofía responde normalmente'
+                            : key === 'manual'
+                              ? 'Sofía se calla temporalmente (6h por defecto)'
+                              : 'Bloquea el número permanentemente'
+                        }
+                      >
+                        <Icon className="w-3 h-3" />
+                        {label}
+                      </button>
+                    )
+                  })}
+                </div>
+
+                {activeConvData.handoff_activo && (
+                  <Button size="sm" variant="outline" onClick={handleRetomar} className="text-kely-green border-kely-green hover:bg-kely-teal hover:text-kely-green dark:hover:bg-kely-teal/20">
+                    <UserCheck className="w-4 h-4 mr-2" /> Marcar Resuelto
+                  </Button>
+                )}
+              </div>
             </div>
             
             <div className="flex-1 overflow-y-auto p-4 space-y-4 bg-muted/30">

@@ -6,7 +6,7 @@ import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Badge } from '@/components/ui/badge'
-import { Server, Activity, ShieldCheck, Sun, Moon, UploadCloud, Brain, Settings2, ShieldAlert, Landmark, CalendarOff, Trash2, Plus, Eye, EyeOff } from 'lucide-react'
+import { Server, Activity, ShieldCheck, Sun, Moon, UploadCloud, Brain, Settings2, ShieldAlert, Landmark, CalendarOff, Trash2, Plus, Eye, EyeOff, MessageSquareText, Ban } from 'lucide-react'
 import { useTheme } from '@/lib/theme-provider'
 import { toggleWhitelistActivaPersisted } from '@/lib/whitelist-toggle.mjs'
 import { getSystemConfig, updateSystemConfig } from '../actions'
@@ -16,6 +16,7 @@ export function ConfigTab() {
   const { theme, setTheme, resolvedTheme } = useTheme()
   const [config, setConfig] = useState(null)
   const [loading, setLoading] = useState(true)
+  const [showLoading, setShowLoading] = useState(false)
   const [savingSettings, setSavingSettings] = useState(false)
 
   // Estados Locales para el formulario
@@ -25,6 +26,14 @@ export function ConfigTab() {
   const [whitelistActiva, setWhitelistActiva] = useState(false)
   const [whitelistInput, setWhitelistInput] = useState('')
   const [savingWhitelistToggle, setSavingWhitelistToggle] = useState(false)
+
+  // Pre-filtro
+  const [blocklistInput, setBlocklistInput] = useState('')
+  const [keywordsIntencion, setKeywordsIntencion] = useState('')
+  const [keywordsSpam, setKeywordsSpam] = useState('')
+  const [cannedTexto, setCannedTexto] = useState('')
+  const [cannedCooldown, setCannedCooldown] = useState(12)
+  const [manualTimeout, setManualTimeout] = useState(6)
   
   // Datos Bancarios
   const [banco, setBanco] = useState('')
@@ -54,6 +63,12 @@ export function ConfigTab() {
         setAiApiKey(res.config.ai_api_key || '')
         setWhitelistActiva(res.config.whitelist_activa || false)
         setWhitelistInput((res.config.whitelist_numeros || []).join(', '))
+        setBlocklistInput((res.config.blocklist_numeros || []).join(', '))
+        setKeywordsIntencion((res.config.keywords_intencion || []).join(', '))
+        setKeywordsSpam((res.config.keywords_spam || []).join(', '))
+        setCannedTexto(res.config.canned_texto || '')
+        setCannedCooldown(res.config.canned_cooldown_horas ?? 12)
+        setManualTimeout(res.config.manual_timeout_horas ?? 6)
         
         const db = res.config.datos_bancarios || {}
         setBanco(db.banco || '')
@@ -67,6 +82,16 @@ export function ConfigTab() {
     }
     load()
   }, [])
+
+  useEffect(() => {
+    if (!loading) {
+      setShowLoading(false)
+      return
+    }
+
+    const t = setTimeout(() => setShowLoading(true), 250)
+    return () => clearTimeout(t)
+  }, [loading])
 
   const handleSaveProviders = async () => {
     setSavingSettings(true)
@@ -111,6 +136,21 @@ export function ConfigTab() {
     }
   }
 
+  const handleSavePrefilter = async () => {
+    setSavingSettings(true)
+    const parseList = (s) => s.split(',').map(v => v.trim()).filter(Boolean)
+    const updates = {
+      blocklist_numeros: parseList(blocklistInput),
+      keywords_intencion: parseList(keywordsIntencion),
+      keywords_spam: parseList(keywordsSpam),
+      canned_texto: cannedTexto,
+      canned_cooldown_horas: parseInt(cannedCooldown) || 12,
+      manual_timeout_horas: parseInt(manualTimeout) || 6,
+    }
+    await updateSystemConfig(updates)
+    setSavingSettings(false)
+  }
+
   const handleSaveBank = async () => {
     setSavingSettings(true)
     const updates = {
@@ -145,7 +185,11 @@ export function ConfigTab() {
   }
 
   if (loading) {
-    return <div className="p-8 text-center text-muted-foreground animate-pulse">Cargando configuración...</div>
+    return (
+      <div className="p-8 text-center text-muted-foreground">
+        {showLoading ? <span className="animate-pulse">Cargando configuración...</span> : null}
+      </div>
+    )
   }
 
   return (
@@ -353,6 +397,97 @@ export function ConfigTab() {
             </CardFooter>
           </Card>
           
+          <Card className="border-secondary/50 shadow-sm">
+            <CardHeader className="pb-3">
+              <CardTitle className="text-base font-semibold flex items-center gap-2">
+                <MessageSquareText className="h-5 w-5 text-kely-green" /> Pre-filtro: Canned & Keywords
+              </CardTitle>
+              <CardDescription className="text-xs">
+                Mensaje de bienvenida, palabras clave de intención y lista de spam.
+              </CardDescription>
+            </CardHeader>
+            <CardContent className="space-y-4">
+              <div className="space-y-1">
+                <Label className="text-xs">Texto Canned (menú inicial)</Label>
+                <textarea
+                  className="flex min-h-[100px] w-full rounded-md border border-input bg-background px-3 py-2 text-sm focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-kely-green"
+                  value={cannedTexto}
+                  onChange={(e) => setCannedTexto(e.target.value)}
+                />
+              </div>
+              <div className="grid grid-cols-2 gap-2">
+                <div className="space-y-1">
+                  <Label className="text-xs">Cooldown canned (horas)</Label>
+                  <Input
+                    type="number"
+                    min={0}
+                    value={cannedCooldown}
+                    onChange={(e) => setCannedCooldown(e.target.value)}
+                    className="h-8 text-sm"
+                  />
+                </div>
+                <div className="space-y-1">
+                  <Label className="text-xs">Timeout modo MANUAL (horas)</Label>
+                  <Input
+                    type="number"
+                    min={0}
+                    value={manualTimeout}
+                    onChange={(e) => setManualTimeout(e.target.value)}
+                    className="h-8 text-sm"
+                  />
+                </div>
+              </div>
+              <div className="space-y-1">
+                <Label className="text-xs">Keywords de intención (separadas por coma)</Label>
+                <textarea
+                  className="flex min-h-[70px] w-full rounded-md border border-input bg-background px-3 py-2 text-xs focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-kely-green"
+                  value={keywordsIntencion}
+                  onChange={(e) => setKeywordsIntencion(e.target.value)}
+                  placeholder="cita, agendar, precio, ozempic…"
+                />
+              </div>
+              <div className="space-y-1">
+                <Label className="text-xs">Keywords de spam (separadas por coma)</Label>
+                <textarea
+                  className="flex min-h-[70px] w-full rounded-md border border-input bg-background px-3 py-2 text-xs focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-kely-green"
+                  value={keywordsSpam}
+                  onChange={(e) => setKeywordsSpam(e.target.value)}
+                  placeholder="casino, crypto, forex…"
+                />
+              </div>
+            </CardContent>
+            <CardFooter>
+              <Button size="sm" onClick={handleSavePrefilter} disabled={savingSettings} className="w-full bg-kely-green hover:bg-kely-green/90 text-white">
+                Guardar Pre-filtro
+              </Button>
+            </CardFooter>
+          </Card>
+
+          <Card className="border-destructive/20 shadow-sm">
+            <CardHeader className="pb-3">
+              <CardTitle className="text-base font-semibold flex items-center gap-2">
+                <Ban className="h-5 w-5 text-destructive" /> Blocklist permanente
+              </CardTitle>
+              <CardDescription className="text-xs">
+                Números a los que Sofía nunca responderá. Separados por coma.
+                Se auto-puebla al cambiar una conversación a PERSONAL.
+              </CardDescription>
+            </CardHeader>
+            <CardContent className="space-y-2">
+              <textarea
+                className="flex min-h-[80px] w-full rounded-md border border-input bg-background px-3 py-2 text-sm focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-kely-green"
+                placeholder="ej: +593999999999, +593888888888"
+                value={blocklistInput}
+                onChange={(e) => setBlocklistInput(e.target.value)}
+              />
+            </CardContent>
+            <CardFooter>
+              <Button size="sm" onClick={handleSavePrefilter} disabled={savingSettings} variant="secondary" className="w-full">
+                Guardar Blocklist
+              </Button>
+            </CardFooter>
+          </Card>
+
           <Card className="shadow-sm">
             <CardHeader className="pb-3">
               <CardTitle className="text-base font-semibold flex items-center gap-2">
