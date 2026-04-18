@@ -197,12 +197,12 @@ export async function executeAgendarCita(args: any, context: any): Promise<strin
 
     if (existingPatient) {
       pacienteId = existingPatient.id;
-      // Opcional: Actualizar datos
-      await supabase.from('pacientes').update({ 
+      // No pisamos pacientes.zona: es la zona de residencia del paciente.
+      // La zona particular de esta cita ya se guarda abajo en citas.zona.
+      await supabase.from('pacientes').update({
         nombre: paciente_nombre,
         fecha_nacimiento: paciente_fecha_nacimiento || null,
-        email: paciente_email || null,
-        zona: zona
+        email: paciente_email || null
       }).eq('id', pacienteId);
     } else {
       const { data: newPatient, error: newError } = await supabase

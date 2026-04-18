@@ -51,6 +51,10 @@ export async function POST(req) {
     // Verificación de firma criptográfica
     const secret = process.env.YCLOUD_WEBHOOK_SECRET;
     if (!secret) {
+      if (process.env.NODE_ENV === "production") {
+        console.error("401 Unauthorized: YCLOUD_WEBHOOK_SECRET no está configurado en producción.");
+        return new NextResponse("Unauthorized", { status: 401 });
+      }
       console.warn("WARNING: YCLOUD_WEBHOOK_SECRET no está configurado. Se omite validación de firma para desarrollo local.");
     } else if (!signature) {
       console.error("401 Unauthorized: Falta YCloud webhook signature.");
