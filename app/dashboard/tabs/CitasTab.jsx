@@ -11,6 +11,7 @@ import { actualizarEstadoCita, verificarPago } from '../actions'
 export function CitasTab() {
   const [citas, setCitas] = useState([])
   const [loading, setLoading] = useState(true)
+  const [showLoading, setShowLoading] = useState(false)
   const [estadoFiltro, setEstadoFiltro] = useState('todos')
   const [fechaFiltro, setFechaFiltro] = useState(new Date().toISOString().split('T')[0])
   const [actionLoading, setActionLoading] = useState(null)
@@ -20,7 +21,7 @@ export function CitasTab() {
   const fetchCitas = useCallback(async () => {
     const { data, error } = await supabase
       .from('citas')
-      .select('*, paciente:pacientes(nombre, telefono, zona), pagos(comprobante_url, verificado)')
+      .select('*, paciente:pacientes(nombre, telefono, zona), pagos(comprobante_url, referencia, verificado)')
       .order('fecha', { ascending: true })
       .order('hora', { ascending: true })
 
@@ -44,6 +45,16 @@ export function CitasTab() {
     }
   }, [fetchCitas, supabase])
 
+  useEffect(() => {
+    if (!loading) {
+      setShowLoading(false)
+      return
+    }
+
+    const t = setTimeout(() => setShowLoading(true), 250)
+    return () => clearTimeout(t)
+  }, [loading])
+
   const citasFiltradas = citas.filter(cita => {
     const matchEstado = estadoFiltro === 'todos' || cita.estado === estadoFiltro
     const matchFecha = !fechaFiltro || cita.fecha === fechaFiltro
@@ -65,8 +76,22 @@ export function CitasTab() {
     fetchCitas()
   }
 
-  const openVoucher = (url) => {
-    window.open(url, '_blank')
+  const openVoucher = async (pago) => {
+    const path = pago?.referencia
+    if (!path) {
+      alert('Este pago no tiene comprobante asociado.')
+      return
+    }
+    const { data, error } = await supabase
+      .storage
+      .from('comprobantes')
+      .createSignedUrl(path, 3600)
+    if (error || !data?.signedUrl) {
+      console.error('Error generando URL firmada:', error)
+      alert('No se pudo abrir el comprobante.')
+      return
+    }
+    window.open(data.signedUrl, '_blank')
   }
 
   return (
@@ -122,7 +147,9 @@ export function CitasTab() {
           <TableBody>
             {loading ? (
                <TableRow>
-                 <TableCell colSpan={5} className="text-center py-6 text-muted-foreground">Cargando citas...</TableCell>
+                 <TableCell colSpan={5} className="text-center py-6 text-muted-foreground">
+                   {showLoading ? 'Cargando citas...' : null}
+                 </TableCell>
                </TableRow>
             ) : citasFiltradas.length === 0 ? (
                <TableRow>
@@ -161,7 +188,7 @@ export function CitasTab() {
                     <div className="flex justify-end gap-1">
                       {cita.estado === 'pendiente_pago' && pago?.comprobante_url && (
                          <>
-                           <Button size="icon" variant="ghost" onClick={() => openVoucher(pago.comprobante_url)} title="Ver Comprobante">
+                           <Button size="icon" variant="ghost" onClick={() => openVoucher(pago)} title="Ver Comprobante">
                              <Eye className="w-4 h-4 text-blue-500" />
                            </Button>
                            <Button size="icon" variant="ghost" disabled={actionLoading === cita.id} onClick={() => handleVerificarPago(cita.id)} title="Verificar Pago">

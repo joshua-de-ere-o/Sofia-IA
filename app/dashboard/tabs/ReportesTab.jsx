@@ -14,6 +14,7 @@ export function ReportesTab() {
     tasa_agendamiento: 0
   })
   const [loading, setLoading] = useState(true)
+  const [showLoading, setShowLoading] = useState(false)
 
   useEffect(() => {
     async function load() {
@@ -24,8 +25,22 @@ export function ReportesTab() {
     load()
   }, [])
 
+  useEffect(() => {
+    if (!loading) {
+      setShowLoading(false)
+      return
+    }
+
+    const t = setTimeout(() => setShowLoading(true), 250)
+    return () => clearTimeout(t)
+  }, [loading])
+
   if (loading) {
-    return <div className="p-8 text-center text-muted-foreground text-sm">Cargando métricas...</div>
+    return (
+      <div className="p-8 text-center text-muted-foreground text-sm">
+        {showLoading ? 'Cargando métricas...' : null}
+      </div>
+    )
   }
 
   return (
