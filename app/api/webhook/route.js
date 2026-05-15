@@ -113,9 +113,12 @@ export async function POST(req) {
 
     if (result.action === "canned") {
       console.log(`[Webhook] Canned → ${senderNumber}`);
-      sendWhatsAppMessage(senderNumber, result.texto)
-        .then(() => markCannedSent(supabase, senderNumber))
-        .catch((err) => console.error(err));
+      try {
+        await sendWhatsAppMessage(senderNumber, result.texto);
+        await markCannedSent(supabase, senderNumber);
+      } catch (err) {
+        console.error("[Webhook] Error enviando canned:", err);
+      }
       return NextResponse.json({ received: true, filtered: true, reason: "canned" });
     }
 
