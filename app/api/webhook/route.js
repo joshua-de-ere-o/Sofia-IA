@@ -155,6 +155,7 @@ export async function POST(req) {
           Authorization: `Bearer ${process.env.SUPABASE_SERVICE_ROLE_KEY}`,
         },
         body: JSON.stringify(body),
+        keepalive: true,
       }).catch((err) => console.error("Error invocando a agent-runner:", err));
     }
 

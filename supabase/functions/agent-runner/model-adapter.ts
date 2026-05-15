@@ -91,7 +91,7 @@ function messagesToGemini(messages: any[]) {
       }
       out.push({ role: "model", parts });
     } else if (msg.role === "tool_result" || msg.role === "tool") {
-      out.push({ role: "function", parts: [{ functionResponse: { name: msg.name || msg.tool_name || "unknown", response: { result: msg.content } } }] });
+      out.push({ role: "user", parts: [{ functionResponse: { name: msg.name || msg.tool_name || "unknown", response: { result: msg.content } } }] });
     }
   }
   return out;
