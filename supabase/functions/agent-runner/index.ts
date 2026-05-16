@@ -38,7 +38,7 @@ async function sendWhatsAppResponse(to: string, text: string) {
   }
 
   try {
-    await fetch("https://api.ycloud.com/v2/whatsapp/messages/send", {
+    await fetch("https://api.ycloud.com/v2/whatsapp/messages", {
       method: "POST",
       headers: {
         "X-API-Key": apiKey,

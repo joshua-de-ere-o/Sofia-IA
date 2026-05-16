@@ -43,7 +43,7 @@ async function sendWhatsApp(to: string, text: string): Promise<void> {
     return;
   }
   try {
-    const res = await fetch("https://api.ycloud.com/v2/whatsapp/messages/send", {
+    const res = await fetch("https://api.ycloud.com/v2/whatsapp/messages", {
       method: "POST",
       headers: {
         "X-API-Key": apiKey,
