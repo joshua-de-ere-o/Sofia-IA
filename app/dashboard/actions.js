@@ -96,13 +96,18 @@ export async function sendManualMessage(conversacion_id, telefono, texto) {
     
   if (conv) {
     const raw = conv.mensajes_raw || []
-    raw.push({ role: 'assistant', content: texto })
-    
+    raw.push({
+      role: 'assistant',
+      sender: 'kelly',
+      content: texto,
+      timestamp: new Date().toISOString(),
+    })
+
     await supabase.from('conversaciones')
       .update({ mensajes_raw: raw, ultima_actividad: new Date().toISOString() })
       .eq('id', conversacion_id)
   }
-  
+
   return { success: true }
 }
 

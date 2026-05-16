@@ -68,14 +68,6 @@ async function isStillLatest(supabase, phone, stamp) {
   return new Date(data.last_message_at).getTime() === new Date(stamp).getTime();
 }
 
-async function markCannedSent(supabase, phone) {
-  await supabase
-    .from("conversaciones")
-    .update({ canned_sent_at: new Date().toISOString() })
-    .eq("telefono_contacto", phone)
-    .eq("estado", "activa");
-}
-
 export async function POST(req) {
   try {
     const rawBody = await req.text();
@@ -140,20 +132,19 @@ export async function POST(req) {
       return NextResponse.json({ received: true, filtered: true, reason: result.reason });
     }
 
-    if (result.action === "audio_reply") {
-      sendWhatsAppMessage(senderNumber, result.texto).catch((err) => console.error(err));
-      return NextResponse.json({ received: true, filtered: true, reason: "audio_reply" });
+    if (result.action === "handoff") {
+      console.log(`[Webhook] Handoff activo ${senderNumber}: la IA no responde.`);
+      return NextResponse.json({ received: true, filtered: true, reason: "handoff" });
     }
 
-    if (result.action === "canned") {
-      console.log(`[Webhook] Canned → ${senderNumber}`);
+    if (result.action === "unsupported") {
+      console.log(`[Webhook] Tipo no soportado de ${senderNumber} (${messageType}).`);
       try {
-        await sendWhatsAppMessage(senderNumber, result.texto);
-        await markCannedSent(supabase, senderNumber);
+        await sendWhatsAppMessage(senderNumber, result.reply);
       } catch (err) {
-        console.error("[Webhook] Error enviando canned:", err);
+        console.error("[Webhook] Error enviando aviso de tipo no soportado:", err);
       }
-      return NextResponse.json({ received: true, filtered: true, reason: "canned" });
+      return NextResponse.json({ received: true, filtered: true, reason: "unsupported" });
     }
 
     // action === 'pass'

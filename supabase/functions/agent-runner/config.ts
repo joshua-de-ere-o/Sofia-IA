@@ -135,7 +135,7 @@ IMPORTANTE: El monto que se registra en el sistema es SIEMPRE el calculado por t
 export const MODEL_CONFIG = {
   max_tokens_normal: 300,
   max_tokens_confirmation: 100,
-  history_condensation_threshold: 6,
+  history_condensation_threshold: 30,
 };
 
 export const TOOLS = [

@@ -28,6 +28,22 @@ const toolExecutors: Record<string, (args: any, ctx: any) => Promise<string>> = 
   reprogramar_cita: executeReprogramarCita,
 };
 
+/**
+ * Recorta el historial a la cola más reciente para conservar contexto
+ * inmediato tras condensar. Empieza siempre en un mensaje 'user' para no
+ * dejar un 'tool' result huérfano ni romper la regla de Anthropic de que
+ * el primer mensaje debe ser del usuario. Devuelve turnos completos.
+ */
+function tailWindow(history: any[], target = 8): any[] {
+  if (history.length <= target) return history;
+  let start = history.length - target;
+  // Retroceder hasta el inicio de turno (mensaje 'user').
+  while (start > 0 && history[start].role !== "user") start--;
+  // Salvaguarda: si no encontró 'user' hacia atrás, avanzar hasta el primero.
+  while (start < history.length && history[start].role !== "user") start++;
+  return history.slice(start);
+}
+
 async function sendWhatsAppResponse(to: string, text: string) {
   const apiKey = Deno.env.get("YCLOUD_API_KEY");
   const from = Deno.env.get("YCLOUD_PHONE_NUMBER_ID");
@@ -202,10 +218,12 @@ Deno.serve(async (req: Request) => {
       });
       const newSummary = sumResponse.text;
       
+      // Conservamos los últimos turnos completos para que el LLM mantenga
+      // contexto inmediato aunque ya exista un resumen.
       await supabase
         .from('conversaciones')
         .update({
-          mensajes_raw: [],
+          mensajes_raw: tailWindow(history),
           historial_resumido: newSummary,
           ultima_actividad: new Date().toISOString(),
           reactivacion_enviada: false
