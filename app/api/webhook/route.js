@@ -4,6 +4,7 @@ import { createClient } from "@supabase/supabase-js";
 import { processPaymentImage } from "../../../lib/payments";
 import { preFilter } from "../../../lib/pre-filter";
 import { sendWhatsAppMessage } from "../../../lib/ycloud";
+import { sendTelegramMessage } from "../../../lib/telegram";
 
 const DEBOUNCE_MS = 2500;
 
@@ -87,6 +88,20 @@ export async function POST(req) {
     }
 
     const payload = JSON.parse(rawBody);
+
+    // DEBUG TEMPORAL: notificar a Telegram el tipo de evento + keys del message
+    try {
+      const debugInfo = {
+        type: payload?.type,
+        msgType: payload?.message?.type,
+        from: payload?.message?.from,
+        from_me: payload?.message?.from_me,
+        keys: payload?.message ? Object.keys(payload.message) : [],
+        body: payload?.message?.text?.body?.slice(0, 60),
+      };
+      await sendTelegramMessage(`🐛 <b>Webhook hit</b>\n<pre>${JSON.stringify(debugInfo, null, 2)}</pre>`);
+    } catch {}
+
     const message = payload?.message;
     if (!message) return NextResponse.json({ received: true });
 
