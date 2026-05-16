@@ -63,7 +63,9 @@ async function isStillLatest(supabase, phone, stamp) {
     .eq("estado", "activa")
     .maybeSingle();
   if (!data?.last_message_at) return true;
-  return data.last_message_at === stamp;
+  // Comparar como timestamps (Postgres devuelve "YYYY-MM-DD HH:mm:ss.sss+00",
+  // JS produce "YYYY-MM-DDTHH:mm:ss.sssZ"); comparación strict de strings nunca cuajaba.
+  return new Date(data.last_message_at).getTime() === new Date(stamp).getTime();
 }
 
 async function markCannedSent(supabase, phone) {
