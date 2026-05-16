@@ -4,7 +4,37 @@ import { createClient } from "@supabase/supabase-js";
 import { processPaymentImage } from "../../../lib/payments";
 import { preFilter } from "../../../lib/pre-filter";
 import { sendWhatsAppMessage } from "../../../lib/ycloud";
-import { sendTelegramMessage } from "../../../lib/telegram";
+
+// YCloud envía eventos con shape:
+//   { type: "whatsapp.inbound_message.received", whatsappInboundMessage: { from, to, type, text:{body}, ... } }
+// Otros eventos (status updates, etc.) usan distintos type y shape.
+// Normalizamos al contrato interno { type: "message.created", message: {...} } que espera pre-filter.
+function normalizeYCloudPayload(raw) {
+  if (raw?.type === "whatsapp.inbound_message.received" && raw?.whatsappInboundMessage) {
+    const m = raw.whatsappInboundMessage;
+    return {
+      type: "message.created",
+      message: {
+        id: m.id,
+        wamid: m.wamid,
+        from: m.from,
+        from_me: false,
+        type: m.type,
+        text: m.text,
+        image: m.image,
+        audio: m.audio,
+        video: m.video,
+        document: m.document,
+        sticker: m.sticker,
+        location: m.location,
+        contacts: m.contacts,
+        reaction: m.reaction,
+        customerProfile: m.customerProfile,
+      },
+    };
+  }
+  return raw;
+}
 
 const DEBOUNCE_MS = 2500;
 
@@ -87,16 +117,7 @@ export async function POST(req) {
       }
     }
 
-    const payload = JSON.parse(rawBody);
-
-    // DEBUG TEMPORAL: notificar a Telegram el payload completo (truncado)
-    try {
-      const rootKeys = payload && typeof payload === "object" ? Object.keys(payload) : [];
-      const dump = JSON.stringify(payload, null, 2).slice(0, 2500);
-      await sendTelegramMessage(
-        `🐛 <b>Webhook RAW</b>\n<b>type:</b> ${payload?.type}\n<b>root keys:</b> ${rootKeys.join(", ")}\n<pre>${dump}</pre>`
-      );
-    } catch {}
+    const payload = normalizeYCloudPayload(JSON.parse(rawBody));
 
     const message = payload?.message;
     if (!message) return NextResponse.json({ received: true });
