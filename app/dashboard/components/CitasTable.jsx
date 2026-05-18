@@ -1,4 +1,5 @@
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table'
+import { getServicioLabel } from '@/lib/servicios'
 import { CitaStatusBadge } from './CitaStatusBadge'
 import { CitaActions } from './CitaActions'
 
@@ -35,7 +36,7 @@ export function CitasTable({ citas, actionLoading, onEstado, onVerificarPago, on
                 </TableCell>
                 <TableCell>
                   <div className="flex flex-col">
-                    <span className="text-sm">{cita.servicio}</span>
+                    <span className="text-sm">{getServicioLabel(cita.servicio)}</span>
                     <span className="text-xs text-muted-foreground capitalize">
                       {cita.modalidad} {cita.modalidad !== 'virtual' ? `(${cita.paciente?.zona})` : ''}
                     </span>

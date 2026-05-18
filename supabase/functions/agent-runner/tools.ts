@@ -157,7 +157,7 @@ export async function executeConsultarDisponibilidad(args: any): Promise<string>
 export async function executeAgendarCita(args: any, context: any): Promise<string> {
   const {
     paciente_nombre, paciente_fecha_nacimiento, paciente_telefono, paciente_email,
-    servicio_id, fecha, hora, modalidad, zona, motivo, monto_adelanto
+    servicio_id, fecha, hora, modalidad, zona, motivo, monto_adelanto, precio_total
   } = args;
 
   if (!paciente_nombre || !paciente_telefono || !servicio_id || !fecha || !hora || !modalidad || !zona) {
@@ -236,7 +236,8 @@ export async function executeAgendarCita(args: any, context: any): Promise<strin
         modalidad: modalidad,
         motivo: motivo,
         zona: zona,
-        monto_adelanto: monto_adelanto || 0
+        monto_adelanto: monto_adelanto || 0,
+        monto_total: precio_total ?? null
       })
       .select()
       .single();

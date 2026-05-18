@@ -1,4 +1,5 @@
 import { Calendar, Clock, Phone, MapPin } from 'lucide-react'
+import { getServicioLabel } from '@/lib/servicios'
 import { CitaStatusBadge } from './CitaStatusBadge'
 import { CitaActions } from './CitaActions'
 
@@ -38,7 +39,7 @@ export function CitaCard({ cita, actionLoading, onEstado, onVerificarPago, onOpe
       </div>
 
       <div className="mt-2 text-sm">
-        <p className="font-medium text-foreground">{cita.servicio}</p>
+        <p className="font-medium text-foreground">{getServicioLabel(cita.servicio)}</p>
         <p className="mt-0.5 flex items-center gap-1 text-xs capitalize text-muted-foreground">
           <MapPin className="h-3 w-3" />
           {modalidadLabel}

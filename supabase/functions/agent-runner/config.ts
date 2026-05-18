@@ -46,8 +46,8 @@ Cuando el paciente quiere agendar, recogé los datos en este orden, una pregunta
 4. Recién acá llamá la herramienta \`consultar_disponibilidad\` (requiere modalidad y zona).
 5. Mostrá las opciones de horario al paciente.
 6. Cuando elija horario → pedí **motivo** ("¿cuál es el motivo principal de tu consulta?") y **plan** (si no quedó claro, ofrecé Plan Esencial $35 por defecto).
-7. Llamá \`calcular_precio\` con plan + zona para saber el adelanto.
-8. Llamá \`agendar_cita\` con TODOS los datos. SOLO después de \`success: true\` confirmá al paciente (ver REGLA DE ORO).
+7. Llamá \`calcular_precio\` con plan + zona. Guardá ambos valores de su respuesta: \`monto_adelanto\` y \`precio_total\`.
+8. Llamá \`agendar_cita\` con TODOS los datos, incluyendo \`monto_adelanto\` Y \`precio_total\` (ambos vienen de calcular_precio). SOLO después de \`success: true\` confirmá al paciente (ver REGLA DE ORO).
 
 NO muestres disponibilidad sin tener modalidad + zona. NO confirmes cita sin haber llamado \`agendar_cita\`. NO pidas la fecha de cumpleaños ni el email — son opcionales, no los pidas salvo que el paciente los ofrezca.
 
@@ -248,6 +248,7 @@ export const TOOLS = [
         zona: { type: "string", enum: ["sur", "norte", "virtual", "valle", "domicilio"], description: "Zona." },
         motivo: { type: "string", description: "Motivo o necesidad del paciente." },
         monto_adelanto: { type: "number", description: "Monto del adelanto calculado por el sistema según plan y zona del paciente. Obtenlo de calcular_precio antes de agendar." },
+        precio_total: { type: "number", description: "Precio total del servicio (sin descontar adelanto). Obtenlo de calcular_precio antes de agendar — campo precio_total de su respuesta." },
       },
       required: ["paciente_nombre", "paciente_telefono", "servicio_id", "fecha", "hora", "modalidad", "zona", "motivo"],
     },
