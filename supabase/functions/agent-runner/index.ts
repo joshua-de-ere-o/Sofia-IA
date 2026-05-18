@@ -110,7 +110,7 @@ Deno.serve(async (req: Request) => {
         })
         .select()
         .single();
-      
+
       if (error) throw error;
       conv = newConv;
     }
@@ -121,18 +121,38 @@ Deno.serve(async (req: Request) => {
       return new Response(JSON.stringify({ status: "ignored_handoff" }), { status: 200, headers: corsHeaders });
     }
 
+    // 1b. Detectar paciente existente por teléfono (no por conversación).
+    // Esto le dice al LLM si tiene que tratar al usuario como nuevo o retornante.
+    const { data: pacienteExistente } = await supabase
+      .from('pacientes')
+      .select('id, nombre, fecha_nacimiento, email, zona')
+      .eq('telefono', senderNumber)
+      .maybeSingle();
+
+    // Si el paciente existe y la conversación aún no está vinculada, vincularla.
+    if (pacienteExistente && !conv.paciente_id) {
+      await supabase
+        .from('conversaciones')
+        .update({ paciente_id: pacienteExistente.id })
+        .eq('id', conv.id);
+      conv.paciente_id = pacienteExistente.id;
+    }
+
     // 2. Cargar historial y armar el nuevo mensaje del usuario
     let history: any[] = Array.isArray(conv.mensajes_raw) ? conv.mensajes_raw : [];
-    
-    // Inyectamos contexto temporal y de memoria condensada (si existe) para el modelo
+
+    // Inyectamos contexto temporal, identidad del paciente y memoria condensada (si existe).
     const nowGuayaquil = new Date().toLocaleString("es-EC", { timeZone: "America/Guayaquil" });
-    const memoryContext = conv.historial_resumido ? `\n\n[MEMORIA ANTIGUA DEL PACIENTE RESUMIDA]:\n${conv.historial_resumido}` : "";
-    
-    const userMessage = { 
-      role: 'user', 
-      content: `[CONTEXTO SISTEMA: Hora actual: ${nowGuayaquil}]${memoryContext}\n\n[MENSAJE DEL USUARIO]:\n${text}` 
+    const pacienteCtx = pacienteExistente
+      ? `\n\n[PACIENTE EXISTENTE]: nombre="${pacienteExistente.nombre}", zona_habitual="${pacienteExistente.zona ?? 'no registrada'}"`
+      : `\n\n[PACIENTE NUEVO — no existe registro previo en el sistema]`;
+    const memoryContext = conv.historial_resumido ? `\n\n[ESTADO PREVIO DE LA CONVERSACIÓN]:\n${conv.historial_resumido}` : "";
+
+    const userMessage = {
+      role: 'user',
+      content: `[CONTEXTO SISTEMA: Hora actual: ${nowGuayaquil}]${pacienteCtx}${memoryContext}\n\n[MENSAJE DEL USUARIO]:\n${text}`
     };
-    
+
     history.push(userMessage);
 
     // 3. Preparar el Adaptador de Modelo (lee directamente de Deno.env)
@@ -208,7 +228,20 @@ Deno.serve(async (req: Request) => {
     if (history.length >= threshold) {
       console.log(`[Agent-Runner] Límite de memoria alcanzado (${history.length}). Condensando...`);
       
-      const summaryPrompt = "Eres un analista de datos. Resume esta conversación entre el usuario y la clínica en un párrafo breve. Conserva el perfil de usuario (nombre/síntomas/necesidad) y en qué parte del flujo se quedaron (ej. buscando fechas, yendo a pagar). Omite saludos triviales.";
+      const summaryPrompt = `Eres un analista de datos de una clínica nutricional. Resume esta conversación en JSON ESTRICTO (sin prosa fuera del JSON) con las siguientes claves obligatorias (usa null si el dato no fue mencionado):
+{
+  "paciente_nombre": string|null,
+  "paciente_es_existente": boolean,
+  "modalidad_elegida": "presencial"|"virtual"|null,
+  "zona_elegida": "sur"|"norte"|"valle"|"virtual"|"domicilio"|null,
+  "plan_tentativo": string|null,
+  "motivo_consulta": string|null,
+  "fecha_hora_tentativa": string|null,
+  "estado_flujo": "explorando"|"recolectando_datos"|"eligiendo_horario"|"pendiente_pago"|"agendada"|"derivada",
+  "ultima_pregunta_pendiente": string|null,
+  "notas_relevantes": string|null
+}
+No inventes datos. Si no estás seguro de un campo, usá null.`;
       
       const sumResponse = await adapter.chat({
         systemPrompt: summaryPrompt, 

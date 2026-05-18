@@ -159,7 +159,12 @@ async function callGemini(apiKey: string, model: string, systemPrompt: string, m
   const body: any = {
     systemInstruction: { parts: [{ text: systemPrompt }] },
     contents: messagesToGemini(messages),
-    generationConfig: { maxOutputTokens: maxTokens },
+    generationConfig: {
+      maxOutputTokens: maxTokens,
+      // Apaga el modo "thinking" de Gemini 2.5 Flash: ahorra tokens facturados
+      // y reduce latencia. Modelos sin thinking ignoran este campo silenciosamente.
+      thinkingConfig: { thinkingBudget: 0 },
+    },
   };
   if (tools.length > 0) body.tools = toolsToGemini(tools);
 
@@ -191,8 +196,21 @@ export function createModelAdapter(provider: string, apiKey: string, model?: str
 /**
  * Lee AI_PROVIDER y API keys primero desde la tabla `configuracion`, con fallback
  * a variables de entorno. Retorna un adaptador listo.
+ *
+ * Cache de 60s a nivel de módulo: en invocaciones calientes de la Edge Function,
+ * Deno reutiliza el isolate y evita una query a Postgres por turno (~150–300ms).
+ * Si la doctora cambia el provider en la tabla `configuracion`, tarda hasta 60s
+ * en propagar — aceptable.
  */
+let _cachedAdapter: ReturnType<typeof createModelAdapter> | null = null;
+let _cachedAt = 0;
+const ADAPTER_CACHE_MS = 60_000;
+
 export async function getModelAdapter() {
+  if (_cachedAdapter && Date.now() - _cachedAt < ADAPTER_CACHE_MS) {
+    return _cachedAdapter;
+  }
+
   let cfgProvider: string | undefined;
   let cfgKey: string | undefined;
 
@@ -227,5 +245,7 @@ export async function getModelAdapter() {
   };
   const apiKey = cfgKey || envKeyMap[provider];
   if (!apiKey) throw new Error(`API key no configurada para proveedor: ${provider}`);
-  return createModelAdapter(provider, apiKey, modelMap[provider]);
+  _cachedAdapter = createModelAdapter(provider, apiKey, modelMap[provider]);
+  _cachedAt = Date.now();
+  return _cachedAdapter;
 }

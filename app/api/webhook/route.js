@@ -36,7 +36,7 @@ function normalizeYCloudPayload(raw) {
   return raw;
 }
 
-const DEBOUNCE_MS = 2500;
+const DEBOUNCE_MS = 1500;
 
 function getServiceClient() {
   return createClient(
