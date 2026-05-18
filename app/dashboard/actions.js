@@ -248,6 +248,170 @@ export async function verificarPago(cita_id) {
 }
 
 /**
+ * Calcular rango de fechas para un periodo dado.
+ * Devuelve strings YYYY-MM-DD en zona horaria local.
+ */
+function calcularRangoPeriodo(periodo) {
+  const now = new Date()
+  const y = now.getFullYear()
+  const m = now.getMonth()
+  const d = now.getDate()
+  const fmt = (date) => {
+    const yy = date.getFullYear()
+    const mm = String(date.getMonth() + 1).padStart(2, '0')
+    const dd = String(date.getDate()).padStart(2, '0')
+    return `${yy}-${mm}-${dd}`
+  }
+
+  let desde, hasta, prevDesde, prevHasta, label
+
+  switch (periodo) {
+    case 'hoy': {
+      desde = new Date(y, m, d)
+      hasta = new Date(y, m, d)
+      prevDesde = new Date(y, m, d - 1)
+      prevHasta = new Date(y, m, d - 1)
+      label = 'Hoy'
+      break
+    }
+    case 'semana': {
+      const dow = (now.getDay() + 6) % 7
+      desde = new Date(y, m, d - dow)
+      hasta = new Date(y, m, d - dow + 6)
+      prevDesde = new Date(y, m, d - dow - 7)
+      prevHasta = new Date(y, m, d - dow - 1)
+      label = 'Esta semana'
+      break
+    }
+    case 'mes-anterior': {
+      desde = new Date(y, m - 1, 1)
+      hasta = new Date(y, m, 0)
+      prevDesde = new Date(y, m - 2, 1)
+      prevHasta = new Date(y, m - 1, 0)
+      label = 'Mes anterior'
+      break
+    }
+    case 'mes':
+    default: {
+      desde = new Date(y, m, 1)
+      hasta = new Date(y, m + 1, 0)
+      prevDesde = new Date(y, m - 1, 1)
+      prevHasta = new Date(y, m, 0)
+      label = 'Este mes'
+      break
+    }
+  }
+
+  return {
+    desde: fmt(desde),
+    hasta: fmt(hasta),
+    prevDesde: fmt(prevDesde),
+    prevHasta: fmt(prevHasta),
+    label,
+  }
+}
+
+/**
+ * Obtener métricas financieras para un periodo.
+ * Devuelve totales y detalle de items para cada categoría: cobrado, por verificar y pendiente.
+ */
+export async function getFinanzasMetrics(periodo = 'mes') {
+  const supabase = await createServerSupabaseClient()
+  const rango = calcularRangoPeriodo(periodo)
+
+  // Pagos del periodo, con datos de cita y paciente
+  const { data: pagos, error: errPagos } = await supabase
+    .from('pagos')
+    .select(`
+      id, monto, verificado, created_at, cita_id,
+      cita:citas(id, fecha, servicio, paciente:pacientes(nombre, telefono))
+    `)
+    .gte('created_at', `${rango.desde}T00:00:00`)
+    .lte('created_at', `${rango.hasta}T23:59:59`)
+    .order('created_at', { ascending: false })
+
+  if (errPagos) return { error: errPagos.message }
+
+  // Citas pendientes de pago en el periodo (sin pago verificado todavía)
+  const { data: citasPendientes, error: errCitas } = await supabase
+    .from('citas')
+    .select(`
+      id, fecha, hora, servicio, monto_adelanto, monto_total, estado,
+      paciente:pacientes(nombre, telefono),
+      pagos(verificado)
+    `)
+    .eq('estado', 'pendiente_pago')
+    .gte('fecha', rango.desde)
+    .lte('fecha', rango.hasta)
+    .order('fecha', { ascending: true })
+
+  if (errCitas) return { error: errCitas.message }
+
+  // Pagos verificados del periodo anterior, sólo para comparación de cobrado
+  const { data: pagosPrev } = await supabase
+    .from('pagos')
+    .select('monto, verificado')
+    .gte('created_at', `${rango.prevDesde}T00:00:00`)
+    .lte('created_at', `${rango.prevHasta}T23:59:59`)
+
+  const cobradoItems = (pagos || [])
+    .filter((p) => p.verificado)
+    .map((p) => ({
+      id: p.id,
+      fecha: p.cita?.fecha || p.created_at?.substring(0, 10),
+      paciente_nombre: p.cita?.paciente?.nombre || 'Sin nombre',
+      paciente_telefono: p.cita?.paciente?.telefono || '',
+      servicio: p.cita?.servicio || '',
+      monto: Number(p.monto) || 0,
+    }))
+
+  const porVerificarItems = (pagos || [])
+    .filter((p) => !p.verificado)
+    .map((p) => ({
+      id: p.id,
+      cita_id: p.cita_id,
+      fecha: p.cita?.fecha || p.created_at?.substring(0, 10),
+      paciente_nombre: p.cita?.paciente?.nombre || 'Sin nombre',
+      paciente_telefono: p.cita?.paciente?.telefono || '',
+      servicio: p.cita?.servicio || '',
+      monto: Number(p.monto) || 0,
+    }))
+
+  const pendienteItems = (citasPendientes || [])
+    .filter((c) => !c.pagos || c.pagos.length === 0)
+    .map((c) => ({
+      id: c.id,
+      fecha: c.fecha,
+      hora: c.hora,
+      paciente_nombre: c.paciente?.nombre || 'Sin nombre',
+      paciente_telefono: c.paciente?.telefono || '',
+      servicio: c.servicio || '',
+      monto: Number(c.monto_adelanto) || 0,
+    }))
+
+  const sum = (arr) => arr.reduce((acc, x) => acc + x.monto, 0)
+  const cobradoTotal = sum(cobradoItems)
+  const porVerificarTotal = sum(porVerificarItems)
+  const pendienteTotal = sum(pendienteItems)
+
+  const cobradoPrev = (pagosPrev || [])
+    .filter((p) => p.verificado)
+    .reduce((acc, p) => acc + (Number(p.monto) || 0), 0)
+
+  const deltaPct = cobradoPrev > 0
+    ? Math.round(((cobradoTotal - cobradoPrev) / cobradoPrev) * 100)
+    : null
+
+  return {
+    periodo: { ...rango, key: periodo },
+    cobrado: { total: cobradoTotal, cantidad: cobradoItems.length, items: cobradoItems },
+    porVerificar: { total: porVerificarTotal, cantidad: porVerificarItems.length, items: porVerificarItems },
+    pendiente: { total: pendienteTotal, cantidad: pendienteItems.length, items: pendienteItems },
+    comparacion: { cobradoPrev, deltaPct },
+  }
+}
+
+/**
  * Obtener métricas para el dashboard
  */
 export async function getDashboardMetrics() {

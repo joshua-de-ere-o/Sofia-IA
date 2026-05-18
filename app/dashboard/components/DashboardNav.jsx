@@ -2,7 +2,7 @@
 
 import Link from 'next/link'
 import { usePathname } from 'next/navigation'
-import { MessageSquare, CalendarDays, BarChart3, Settings, LogOut } from 'lucide-react'
+import { MessageSquare, CalendarDays, BarChart3, DollarSign, Settings, LogOut } from 'lucide-react'
 import { cn } from '@/lib/utils'
 
 export function DashboardNav() {
@@ -11,6 +11,7 @@ export function DashboardNav() {
   const navItems = [
     { href: '/dashboard', icon: MessageSquare, label: 'Mensajes', exact: true },
     { href: '/dashboard/citas', icon: CalendarDays, label: 'Citas' },
+    { href: '/dashboard/finanzas', icon: DollarSign, label: 'Finanzas' },
     { href: '/dashboard/reportes', icon: BarChart3, label: 'Reportes' },
     { href: '/dashboard/configuracion', icon: Settings, label: 'Ajustes' },
   ]
