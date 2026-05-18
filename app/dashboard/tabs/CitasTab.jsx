@@ -1,110 +1,93 @@
 'use client'
 
-import { useState, useEffect, useCallback, useMemo } from 'react'
-import { Badge } from '@/components/ui/badge'
-import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table'
+import { useState, useEffect } from 'react'
 import { Button } from '@/components/ui/button'
-import { Check, X, Eye, ShieldCheck, Filter } from 'lucide-react'
-import { createClient } from '@/lib/supabase'
-import { actualizarEstadoCita, verificarPago } from '../actions'
+import { Filter, List, CalendarRange } from 'lucide-react'
+import { cn } from '@/lib/utils'
+import { useCitas } from '../hooks/useCitas'
+import { CitasTable } from '../components/CitasTable'
+import { CitaCard } from '../components/CitaCard'
+import { CitasCalendar } from '../components/CitasCalendar'
 
 export function CitasTab() {
-  const [citas, setCitas] = useState([])
-  const [loading, setLoading] = useState(true)
-  const [showLoading, setShowLoading] = useState(false)
+  const { citas, loading, actionLoading, handleEstado, handleVerificarPago, openVoucher } = useCitas()
+
+  const today = new Date().toISOString().split('T')[0]
   const [estadoFiltro, setEstadoFiltro] = useState('todos')
-  const [fechaFiltro, setFechaFiltro] = useState(new Date().toISOString().split('T')[0])
-  const [actionLoading, setActionLoading] = useState(null)
-
-  const supabase = useMemo(() => createClient(), [])
-
-  const fetchCitas = useCallback(async () => {
-    const { data, error } = await supabase
-      .from('citas')
-      .select('*, paciente:pacientes(nombre, telefono, zona), pagos(comprobante_url, referencia, verificado)')
-      .order('fecha', { ascending: true })
-      .order('hora', { ascending: true })
-
-    if (data) {
-      setCitas(data)
-    }
-    setLoading(false)
-  }, [supabase])
-
-  useEffect(() => {
-    fetchCitas()
-
-    const channelCitas = supabase
-      .channel('public:citas_pagos')
-      .on('postgres_changes', { event: '*', schema: 'public', table: 'citas' }, fetchCitas)
-      .on('postgres_changes', { event: '*', schema: 'public', table: 'pagos' }, fetchCitas)
-      .subscribe()
-
-    return () => {
-      supabase.removeChannel(channelCitas)
-    }
-  }, [fetchCitas, supabase])
+  const [fechaFiltro, setFechaFiltro] = useState(today)
+  const [vista, setVista] = useState('lista')
+  const [showLoading, setShowLoading] = useState(false)
 
   useEffect(() => {
     if (!loading) {
       setShowLoading(false)
       return
     }
-
     const t = setTimeout(() => setShowLoading(true), 250)
     return () => clearTimeout(t)
   }, [loading])
 
-  const citasFiltradas = citas.filter(cita => {
+  const citasFiltradas = citas.filter((cita) => {
     const matchEstado = estadoFiltro === 'todos' || cita.estado === estadoFiltro
     const matchFecha = !fechaFiltro || cita.fecha === fechaFiltro
     return matchEstado && matchFecha
   })
 
-  const handleEstado = async (id, estado) => {
-    setActionLoading(id)
-    await actualizarEstadoCita(id, estado)
-    setActionLoading(null)
-    // No need to fetchCitas here, realtime will trigger it, but just in case:
-    fetchCitas()
-  }
+  const citasParaCalendario = citas.filter(
+    (cita) => estadoFiltro === 'todos' || cita.estado === estadoFiltro,
+  )
 
-  const handleVerificarPago = async (id) => {
-    setActionLoading(id)
-    await verificarPago(id)
-    setActionLoading(null)
-    fetchCitas()
-  }
+  const emptyMessage = loading
+    ? showLoading
+      ? 'Cargando citas...'
+      : ''
+    : vista === 'calendario' && fechaFiltro
+      ? 'No hay citas para el día seleccionado.'
+      : 'No hay citas con los filtros actuales.'
 
-  const openVoucher = async (pago) => {
-    const path = pago?.referencia
-    if (!path) {
-      alert('Este pago no tiene comprobante asociado.')
-      return
-    }
-    const { data, error } = await supabase
-      .storage
-      .from('comprobantes')
-      .createSignedUrl(path, 3600)
-    if (error || !data?.signedUrl) {
-      console.error('Error generando URL firmada:', error)
-      alert('No se pudo abrir el comprobante.')
-      return
-    }
-    window.open(data.signedUrl, '_blank')
-  }
+  const hasFilters = estadoFiltro !== 'todos' || fechaFiltro
 
   return (
     <div className="flex flex-col gap-4 h-full">
-      <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4">
+      <div className="flex flex-col gap-3 sm:flex-row sm:justify-between sm:items-center">
         <div>
           <h2 className="text-lg font-semibold">Agenda de Citas</h2>
           <p className="text-sm text-muted-foreground">Revisa las citas agendadas y pendientes.</p>
         </div>
-        <div className="flex flex-wrap gap-2">
+
+        <div className="flex flex-wrap items-center gap-2">
+          <div className="inline-flex rounded-md border bg-background p-0.5">
+            <button
+              type="button"
+              onClick={() => setVista('lista')}
+              className={cn(
+                'inline-flex h-7 items-center gap-1.5 rounded px-2 text-xs font-medium transition-colors',
+                vista === 'lista'
+                  ? 'bg-kely-teal text-kely-green'
+                  : 'text-muted-foreground hover:text-foreground',
+              )}
+            >
+              <List className="h-3.5 w-3.5" />
+              Lista
+            </button>
+            <button
+              type="button"
+              onClick={() => setVista('calendario')}
+              className={cn(
+                'inline-flex h-7 items-center gap-1.5 rounded px-2 text-xs font-medium transition-colors',
+                vista === 'calendario'
+                  ? 'bg-kely-teal text-kely-green'
+                  : 'text-muted-foreground hover:text-foreground',
+              )}
+            >
+              <CalendarRange className="h-3.5 w-3.5" />
+              Calendario
+            </button>
+          </div>
+
           <div className="relative">
             <Filter className="absolute left-2.5 top-2 h-4 w-4 text-muted-foreground pointer-events-none" />
-            <select 
+            <select
               value={estadoFiltro}
               onChange={(e) => setEstadoFiltro(e.target.value)}
               className="flex h-8 w-36 rounded-md border border-input bg-background pl-8 pr-3 text-sm focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-kely-green appearance-none cursor-pointer"
@@ -117,104 +100,67 @@ export function CitasTab() {
               <option value="cancelada">Cancelada</option>
             </select>
           </div>
-          <div className="relative">
-            <input 
-              type="date"
-              value={fechaFiltro}
-              onChange={(e) => setFechaFiltro(e.target.value)}
-              className="flex h-8 w-36 rounded-md border border-input bg-background px-3 text-sm focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-kely-green cursor-pointer text-muted-foreground"
-            />
-          </div>
-          {(estadoFiltro !== 'todos' || fechaFiltro) && (
-            <Button variant="ghost" size="sm" onClick={() => { setEstadoFiltro('todos'); setFechaFiltro(''); }} className="h-8 px-2 text-muted-foreground hover:text-foreground">
+
+          {vista === 'lista' && (
+            <div className="relative">
+              <input
+                type="date"
+                value={fechaFiltro}
+                onChange={(e) => setFechaFiltro(e.target.value)}
+                className="flex h-8 w-36 rounded-md border border-input bg-background px-3 text-sm focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-kely-green cursor-pointer text-muted-foreground"
+              />
+            </div>
+          )}
+
+          {hasFilters && (
+            <Button
+              variant="ghost"
+              size="sm"
+              onClick={() => { setEstadoFiltro('todos'); setFechaFiltro('') }}
+              className="h-8 px-2 text-muted-foreground hover:text-foreground"
+            >
               Quitar Filtros
             </Button>
           )}
         </div>
       </div>
 
-      <div className="border rounded-md overflow-x-auto bg-card">
-        <Table>
-          <TableHeader>
-            <TableRow>
-              <TableHead>Fecha/Hora</TableHead>
-              <TableHead>Paciente</TableHead>
-              <TableHead>Servicio / Modalidad</TableHead>
-              <TableHead>Estado</TableHead>
-              <TableHead className="text-right">Acciones</TableHead>
-            </TableRow>
-          </TableHeader>
-          <TableBody>
-            {loading ? (
-               <TableRow>
-                 <TableCell colSpan={5} className="text-center py-6 text-muted-foreground">
-                   {showLoading ? 'Cargando citas...' : null}
-                 </TableCell>
-               </TableRow>
-            ) : citasFiltradas.length === 0 ? (
-               <TableRow>
-                 <TableCell colSpan={5} className="text-center py-6 text-muted-foreground">No hay citas con los filtros actuales.</TableCell>
-               </TableRow>
-            ) : (
-             citasFiltradas.map(cita => {
-              const pago = cita.pagos?.[0]
-              
-              return (
-                <TableRow key={cita.id}>
-                  <TableCell className="font-medium whitespace-nowrap">
-                    <div>{cita.fecha}</div>
-                    <div className="text-xs text-muted-foreground">{cita.hora.substring(0,5)}</div>
-                  </TableCell>
-                  <TableCell>
-                    <div>{cita.paciente?.nombre}</div>
-                    <div className="text-xs text-muted-foreground">{cita.paciente?.telefono}</div>
-                  </TableCell>
-                  <TableCell>
-                    <div className="flex flex-col">
-                      <span className="text-sm">{cita.servicio}</span>
-                      <span className="text-xs text-muted-foreground capitalize">
-                        {cita.modalidad} {cita.modalidad !== 'virtual' ? `(${cita.paciente?.zona})` : ''}
-                      </span>
-                    </div>
-                  </TableCell>
-                  <TableCell>
-                    {cita.estado === 'confirmada' && <Badge className="bg-kely-green hover:bg-kely-green/90 text-white">Confirmada</Badge>}
-                    {cita.estado === 'pendiente_pago' && <Badge variant="secondary" className="bg-orange-100 dark:bg-orange-900/30 text-orange-700 dark:text-orange-400">Pdte. Pago</Badge>}
-                    {cita.estado === 'completada' && <Badge variant="outline" className="text-muted-foreground">Completada</Badge>}
-                    {cita.estado === 'no_show' && <Badge variant="destructive" className="bg-red-100 dark:bg-red-900/30 text-red-700 dark:text-red-400">No Show</Badge>}
-                    {cita.estado === 'cancelada' && <Badge variant="outline" className="text-red-700 dark:text-red-400 border-red-200">Cancelada</Badge>}
-                  </TableCell>
-                  <TableCell className="text-right whitespace-nowrap">
-                    <div className="flex justify-end gap-1">
-                      {cita.estado === 'pendiente_pago' && pago?.comprobante_url && (
-                         <>
-                           <Button size="icon" variant="ghost" onClick={() => openVoucher(pago)} title="Ver Comprobante">
-                             <Eye className="w-4 h-4 text-blue-500" />
-                           </Button>
-                           <Button size="icon" variant="ghost" disabled={actionLoading === cita.id} onClick={() => handleVerificarPago(cita.id)} title="Verificar Pago">
-                             <ShieldCheck className="w-4 h-4 text-kely-green" />
-                           </Button>
-                         </>
-                      )}
-                      
-                      {['confirmada', 'pendiente_pago'].includes(cita.estado) && (
-                        <>
-                          <Button size="icon" variant="ghost" disabled={actionLoading === cita.id} onClick={() => handleEstado(cita.id, 'completada')} className="text-kely-green hover:text-kely-green hover:bg-kely-teal dark:hover:bg-kely-teal/20" title="Marcar Completada">
-                            <Check className="w-4 h-4" />
-                          </Button>
-                          <Button size="icon" variant="ghost" disabled={actionLoading === cita.id} onClick={() => handleEstado(cita.id, 'cancelada')} className="text-destructive hover:text-destructive hover:bg-destructive/10" title="Cancelar">
-                            <X className="w-4 h-4" />
-                          </Button>
-                        </>
-                      )}
-                    </div>
-                  </TableCell>
-                </TableRow>
-              )
-             })
-            )}
-          </TableBody>
-        </Table>
+      {vista === 'calendario' && (
+        <CitasCalendar
+          citas={citasParaCalendario}
+          selectedDate={fechaFiltro}
+          onSelectDate={setFechaFiltro}
+        />
+      )}
+
+      <div className="hidden md:block">
+        <CitasTable
+          citas={citasFiltradas}
+          actionLoading={actionLoading}
+          onEstado={handleEstado}
+          onVerificarPago={handleVerificarPago}
+          onOpenVoucher={openVoucher}
+          emptyMessage={emptyMessage}
+        />
+      </div>
+
+      <div className="md:hidden flex flex-col gap-3">
+        {citasFiltradas.length === 0 ? (
+          <div className="rounded-lg border bg-card py-8 text-center text-sm text-muted-foreground">
+            {emptyMessage}
+          </div>
+        ) : (
+          citasFiltradas.map((cita) => (
+            <CitaCard
+              key={cita.id}
+              cita={cita}
+              actionLoading={actionLoading}
+              onEstado={handleEstado}
+              onVerificarPago={handleVerificarPago}
+              onOpenVoucher={openVoucher}
+            />
+          ))
+        )}
       </div>
     </div>
   )
