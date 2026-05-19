@@ -375,6 +375,15 @@ deno_version = 2
 # [edge_runtime.secrets]
 # secret_key = "env(SECRET_VALUE)"
 
+# Funciones invocadas por pg_cron (sin JWT de usuario). El propio código verifica
+# x-cron-secret. Sin verify_jwt = false el gateway rechaza con 401 antes de llegar
+# a la función.
+[functions.enviar-recordatorios]
+verify_jwt = false
+
+[functions.resolver-handoffs]
+verify_jwt = false
+
 [analytics]
 enabled = true
 port = 54327

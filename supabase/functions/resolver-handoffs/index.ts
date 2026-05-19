@@ -178,7 +178,7 @@ async function procesarRecordatorios(supabase: SupabaseLike): Promise<void> {
 Deno.serve(async (req: Request) => {
   const cronSecret = req.headers.get("x-cron-secret") ?? "";
   const authHeader = req.headers.get("Authorization") ?? "";
-  const expectedSecret = Deno.env.get("CRON_SECRET") ?? "kelly-cron-secret-2024";
+  const expectedSecret = Deno.env.get("CRON_SECRET") ?? "kelly-cron-secret-2026";
 
   const isValidCron = cronSecret === expectedSecret;
   const isValidJwt = authHeader.startsWith("Bearer ");
