@@ -473,7 +473,7 @@ Definidas en [supabase/functions/agent-runner/config.ts](supabase/functions/agen
 
 **`pacientes`** — id UUID, nombre, fecha_nacimiento, telefono UNIQUE, email, zona (enum), created_at.
 
-**`citas`** — id UUID, paciente_id FK, servicio TEXT, fecha DATE, hora TIME, duracion_min (default 30), estado (enum: `bloqueado|pendiente_pago|confirmada|completada|cancelada|no_show`), modalidad (enum), payment_method, payment_reference, external_calendar_id, reminder_24h_sent, reminder_2h_sent, **motivo** (añadida 04-14), **zona** (añadida 04-14), **monto_adelanto** NUMERIC (añadida 04-16), created_at, updated_at.
+**`citas`** — id UUID, paciente_id FK (NULL si bloqueo), servicio TEXT, fecha DATE, hora TIME, duracion_min (default 30), estado (enum: `agenda_bloqueada|pendiente_pago|confirmada|completada|cancelada|no_show`), modalidad (enum), payment_method, payment_reference, external_calendar_id, reminder_24h_sent, reminder_2h_sent, **motivo** (añadida 04-14), **zona** (añadida 04-14), **monto_adelanto** NUMERIC (añadida 04-16), **monto_total** NUMERIC (añadida 2026-05-18), **motivo_bloqueo** TEXT (añadida 2026-05-19, solo para `agenda_bloqueada`), created_at, updated_at. CHECK: si `paciente_id` es NULL, `estado` debe ser `agenda_bloqueada`.
 
 **`conversaciones`** — id UUID, paciente_id FK, canal (enum), estado (enum `activa|cerrada`), historial_resumido, handoff_activo, ultima_actividad, reactivacion_enviada, created_at, **mensajes_raw** JSONB (añadida 04-07), **telefono_contacto** TEXT (añadida 04-07), **mode** (`auto|manual|personal`), **canned_sent_at**, **last_message_at**, **manual_until** (4 nuevas de spec 09).
 

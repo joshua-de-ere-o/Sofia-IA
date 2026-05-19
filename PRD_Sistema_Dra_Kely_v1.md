@@ -151,7 +151,7 @@ Paciente → WhatsApp
 
 **V2 preparado:** PayPhone — campos en Supabase listos desde V1.
 
-**Estados del slot:** `bloqueado` (al elegir horario) → `confirmado` (al recibir comprobante o si zona no requiere pago).
+**Estados del slot:** la cita arranca en `pendiente_pago` (zonas con adelanto) o `confirmada` (zonas sin adelanto). Existe además el estado `agenda_bloqueada` para bloqueos de agenda no-paciente creados por Kely (reuniones, etc.); estos no tienen `paciente_id` y llevan un `motivo_bloqueo` libre.
 
 ---
 

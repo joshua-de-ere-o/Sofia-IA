@@ -434,16 +434,17 @@ async function procesarResumenMatutino(supabase: ReturnType<typeof createClient>
     return;
   }
 
-  // Citas del día (confirmadas + pendientes de pago)
-  const { data: citas } = await supabase
-    .from("citas")
-    .select(`
-      hora, servicio, modalidad, estado,
-      pacientes!inner(nombre)
-    `)
-    .eq("fecha", hoyQuito)
-    .in("estado", ["confirmada", "pendiente_pago"])
-    .order("hora", { ascending: true });
+  // Agenda del día via funcion SQL compartida (citas de pacientes + bloqueos de Kely).
+  // Misma fuente de verdad que la tool consultar_agenda del modo-Kelly por Telegram.
+  const { data: agenda, error: agendaErr } = await supabase
+    .rpc("obtener_agenda_del_dia", { p_fecha: hoyQuito });
+
+  if (agendaErr) {
+    console.error("[Resumen] Error en obtener_agenda_del_dia:", agendaErr);
+  }
+
+  const citas = (agenda ?? []).filter((row: any) => !row.es_bloqueo);
+  const bloqueos = (agenda ?? []).filter((row: any) => row.es_bloqueo);
 
   // Tareas pendientes del día (no enviadas cuya fecha_hora cae dentro del día Quito)
   const startQuitoUTC = new Date(`${hoyQuito}T00:00:00-05:00`);
@@ -463,13 +464,23 @@ async function procesarResumenMatutino(supabase: ReturnType<typeof createClient>
   lines.push("");
 
   lines.push("📅 <b>Citas de hoy</b>");
-  if (!citas || citas.length === 0) {
+  if (citas.length === 0) {
     lines.push("• Sin citas agendadas.");
   } else {
-    for (const c of citas as any[]) {
+    for (const c of citas) {
       const hora = (c.hora || "").slice(0, 5);
       const marca = c.estado === "pendiente_pago" ? " (pendiente pago)" : "";
-      lines.push(`• ${hora} — ${c.pacientes.nombre} · ${c.servicio}${marca}`);
+      lines.push(`• ${hora} — ${c.paciente_nombre} · ${c.servicio}${marca}`);
+    }
+  }
+
+  if (bloqueos.length > 0) {
+    lines.push("");
+    lines.push("📌 <b>Bloqueos / reuniones</b>");
+    for (const b of bloqueos) {
+      const hora = (b.hora || "").slice(0, 5);
+      const motivo = b.motivo_bloqueo || "Bloqueo de agenda";
+      lines.push(`• ${hora} — ${motivo}`);
     }
   }
 

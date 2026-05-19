@@ -49,12 +49,13 @@ Cargar feriados del año actual al iniciar. Actualizar anualmente.
 | Campo | Tipo | Nota |
 |---|---|---|
 | id | uuid | PK |
-| paciente_id | uuid | FK → pacientes |
+| paciente_id | uuid | FK → pacientes; NULL si es bloqueo de agenda creado por Kely |
 | servicio | text | Nombre del servicio/plan |
 | fecha | date | |
 | hora | time | |
 | duracion_min | int | 30 o 40 |
-| estado | text | `bloqueado`, `pendiente_pago`, `confirmada`, `completada`, `cancelada`, `no_show` |
+| estado | text | `agenda_bloqueada`, `pendiente_pago`, `confirmada`, `completada`, `cancelada`, `no_show` |
+| motivo_bloqueo | text | NULL para citas de paciente; texto libre para bloqueos de agenda (ej. "Reunión Dr. Molina") |
 | modalidad | text | `presencial`, `virtual` |
 | zona | text | `sur`, `norte`, `virtual`, `valle`, `domicilio` |
 | payment_method | text | `transfer`, `cash`, `payphone` (nullable) |
@@ -66,13 +67,15 @@ Cargar feriados del año actual al iniciar. Actualizar anualmente.
 ## Estados del Slot
 
 ```
-bloqueado        → paciente eligió horario, esperando pago (si aplica)
 pendiente_pago   → zona requiere adelanto, esperando comprobante
-confirmada       → pago recibido o zona sin adelanto
+confirmada       → pago recibido, o zona sin adelanto (estado inicial habitual)
 completada       → cita atendida
 cancelada        → cancelada por paciente o doctora
 no_show          → paciente no se presentó
+agenda_bloqueada → bloqueo de agenda creado por Kely (reuniones, eventos personales, etc.); paciente_id es NULL y motivo_bloqueo describe el evento
 ```
+
+Nota: el flujo de paciente arranca en `pendiente_pago` o `confirmada` según la zona. El estado `agenda_bloqueada` es un canal separado, no parte del ciclo de vida de una cita de paciente.
 
 ## Cancelación y Reprogramación
 
