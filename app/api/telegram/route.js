@@ -26,6 +26,40 @@ export async function POST(req) {
 async function handleCallbackQuery(callbackQuery) {
   const data = callbackQuery.data;
 
+  if (data && (data.startsWith('attendance_yes_') || data.startsWith('attendance_no_'))) {
+    const vino = data.startsWith('attendance_yes_');
+    const citaId = data.replace(vino ? 'attendance_yes_' : 'attendance_no_', '');
+    if (citaId && citaId !== 'none') {
+      await resolveAttendance(citaId, vino);
+
+      const token = process.env.TELEGRAM_BOT_TOKEN;
+      if (token && callbackQuery.id) {
+        await fetch(`https://api.telegram.org/bot${token}/answerCallbackQuery`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            callback_query_id: callbackQuery.id,
+            text: vino ? '✅ Marcada como completada.' : '❌ Marcada como no-show.',
+          }),
+        });
+
+        if (callbackQuery.message && callbackQuery.message.message_id) {
+          const label = vino ? '✅ Completada' : '❌ No-show';
+          await fetch(`https://api.telegram.org/bot${token}/editMessageReplyMarkup`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              chat_id: callbackQuery.message.chat.id,
+              message_id: callbackQuery.message.message_id,
+              reply_markup: { inline_keyboard: [[{ text: label, callback_data: 'none' }]] },
+            }),
+          });
+        }
+      }
+    }
+    return;
+  }
+
   if (data && data.startsWith('handoff_done_')) {
     const conversacionId = data.replace('handoff_done_', '');
 
@@ -240,6 +274,17 @@ async function sendToKely(text) {
     });
   } catch (err) {
     console.error('[Telegram] Error enviando mensaje:', err?.message || err);
+  }
+}
+
+async function resolveAttendance(citaId, vino) {
+  const nuevoEstado = vino ? 'completada' : 'no_show';
+  const { error } = await supabase
+    .from('citas')
+    .update({ estado: nuevoEstado })
+    .eq('id', citaId);
+  if (error) {
+    console.error('[Telegram/attendance] Error actualizando cita:', error);
   }
 }
 

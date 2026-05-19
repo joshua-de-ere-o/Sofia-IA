@@ -65,7 +65,11 @@ async function sendWhatsApp(to: string, text: string): Promise<void> {
   }
 }
 
-async function sendTelegram(text: string, parseMode: "HTML" | "plain" = "HTML"): Promise<void> {
+async function sendTelegram(
+  text: string,
+  parseMode: "HTML" | "plain" = "HTML",
+  replyMarkup?: Record<string, unknown>,
+): Promise<void> {
   const token = Deno.env.get("TELEGRAM_BOT_TOKEN");
   const chatId = Deno.env.get("TELEGRAM_CHAT_ID");
   if (!token || !chatId) {
@@ -75,6 +79,7 @@ async function sendTelegram(text: string, parseMode: "HTML" | "plain" = "HTML"):
   try {
     const body: Record<string, unknown> = { chat_id: chatId, text };
     if (parseMode === "HTML") body.parse_mode = "HTML";
+    if (replyMarkup) body.reply_markup = replyMarkup;
     await fetch(`https://api.telegram.org/bot${token}/sendMessage`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -291,50 +296,71 @@ Hora: ${cita.hora}, Modalidad: ${cita.modalidad}.`,
   }
 }
 
-/** No-show: cita confirmada vencida (+15 min de gracia). */
-async function procesarNoShows(supabase: ReturnType<typeof createClient>): Promise<void> {
+/**
+ * Confirmación de asistencia: cita confirmada vencida (+15 min de gracia).
+ *
+ * No marca `no_show` automáticamente. Pregunta a Kely por Telegram con
+ * botones inline. La cita queda en `confirmada` hasta que Kely responda;
+ * el webhook de Telegram (app/api/telegram/route.js) procesa el callback
+ * y actualiza el estado a `completada` o `no_show`.
+ *
+ * `attendance_check_sent` evita preguntar dos veces por la misma cita.
+ */
+async function procesarConfirmacionAsistencia(
+  supabase: ReturnType<typeof createClient>,
+): Promise<void> {
   const ahora = nowGuayaquil();
   const limiteGracia = new Date(ahora.getTime() - 15 * 60 * 1000);
   const { fecha: fechaLimite, hora: horaLimite } = toGuayaquilParts(limiteGracia);
 
-  const { data: noShows, error } = await supabase
+  const { data: pendientes, error } = await supabase
     .from("citas")
     .select(`
       id, fecha, hora, servicio, modalidad,
       pacientes!inner(nombre, telefono)
     `)
     .eq("estado", "confirmada")
+    .eq("attendance_check_sent", false)
     .or(`fecha.lt.${fechaLimite},and(fecha.eq.${fechaLimite},hora.lt.${horaLimite})`);
 
   if (error) {
-    console.error("[NoShow] Error consultando citas:", error);
+    console.error("[Asistencia] Error consultando citas:", error);
     return;
   }
-  if (!noShows || noShows.length === 0) {
-    console.log("[NoShow] Sin no-shows para reportar.");
+  if (!pendientes || pendientes.length === 0) {
+    console.log("[Asistencia] Sin confirmaciones pendientes.");
     return;
   }
 
-  for (const cita of noShows) {
+  for (const cita of pendientes) {
     const paciente = (cita as any).pacientes;
+    const hora = (cita.hora || "").slice(0, 5);
 
-    await supabase
-      .from("citas")
-      .update({ estado: "no_show" })
-      .eq("id", cita.id);
+    const msg = `🕒 <b>¿Vino ${paciente.nombre}?</b>
 
-    const msg = `⚠️ <b>No-Show registrado</b>
-
-Paciente: <b>${paciente.nombre}</b>
-Tel: ${paciente.telefono}
-Cita: ${cita.fecha} a las ${cita.hora}
+Cita: ${cita.fecha} a las ${hora}
 Servicio: ${cita.servicio}
 Modalidad: ${cita.modalidad}
+Tel: ${paciente.telefono}
 
-La cita ha sido marcada como <b>no_show</b> automáticamente.`;
+Confirma para registrar la asistencia.`;
 
-    await sendTelegram(msg);
-    console.log(`[NoShow] Reportado a Kely: paciente ${paciente.nombre}`);
+    const replyMarkup = {
+      inline_keyboard: [[
+        { text: "✅ Sí, vino", callback_data: `attendance_yes_${cita.id}` },
+        { text: "❌ No vino", callback_data: `attendance_no_${cita.id}` },
+      ]],
+    };
+
+    await sendTelegram(msg, "HTML", replyMarkup);
+
+    // Marcar como preguntada — aunque Telegram falle, no insistimos cada 10 min.
+    await supabase
+      .from("citas")
+      .update({ attendance_check_sent: true })
+      .eq("id", cita.id);
+
+    console.log(`[Asistencia] Pregunta enviada a Kely: paciente ${paciente.nombre}`);
   }
 }
 
@@ -479,7 +505,7 @@ async function procesarResumenMatutino(supabase: ReturnType<typeof createClient>
 Deno.serve(async (req: Request) => {
   const cronSecret = req.headers.get("x-cron-secret") ?? "";
   const authHeader = req.headers.get("Authorization") ?? "";
-  const expectedSecret = Deno.env.get("CRON_SECRET") ?? "kelly-cron-secret-2024";
+  const expectedSecret = Deno.env.get("CRON_SECRET") ?? "kelly-cron-secret-2026";
 
   const isValidCron = cronSecret === expectedSecret;
   const isValidJwt = authHeader.startsWith("Bearer ");
@@ -503,10 +529,13 @@ Deno.serve(async (req: Request) => {
     const jobs: Promise<void>[] = [
       procesarTareas(supabase),
       procesarResumenMatutino(supabase),
+      // Confirmación de asistencia: corre cada 10 min — no consume Anthropic
+      // Batch, sólo Telegram. El delay máximo respecto a la hora de cita + 15
+      // min es ~10 min, lo cual es aceptable para Kely.
+      procesarConfirmacionAsistencia(supabase),
     ];
     if (esTopDeHora) {
       jobs.push(procesarRecordatoriosCitas(supabase));
-      jobs.push(procesarNoShows(supabase));
     }
 
     await Promise.all(jobs);
