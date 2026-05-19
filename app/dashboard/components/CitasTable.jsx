@@ -3,7 +3,7 @@ import { getServicioLabel } from '@/lib/servicios'
 import { CitaStatusBadge } from './CitaStatusBadge'
 import { CitaActions } from './CitaActions'
 
-export function CitasTable({ citas, actionLoading, onEstado, onVerificarPago, onOpenVoucher, emptyMessage }) {
+export function CitasTable({ citas, actionLoading, onEstado, onVerificarPago, onReagendar, onOpenVoucher, emptyMessage }) {
   return (
     <div className="border rounded-md overflow-x-auto bg-card">
       <Table>
@@ -52,6 +52,7 @@ export function CitasTable({ citas, actionLoading, onEstado, onVerificarPago, on
                       actionLoading={actionLoading}
                       onEstado={onEstado}
                       onVerificarPago={onVerificarPago}
+                      onReagendar={onReagendar}
                       onOpenVoucher={onOpenVoucher}
                     />
                   </div>

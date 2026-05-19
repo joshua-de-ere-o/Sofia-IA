@@ -3,7 +3,7 @@ import { getServicioLabel } from '@/lib/servicios'
 import { CitaStatusBadge } from './CitaStatusBadge'
 import { CitaActions } from './CitaActions'
 
-export function CitaCard({ cita, actionLoading, onEstado, onVerificarPago, onOpenVoucher }) {
+export function CitaCard({ cita, actionLoading, onEstado, onVerificarPago, onReagendar, onOpenVoucher }) {
   const hora = cita.hora?.substring(0, 5)
   const modalidadLabel =
     cita.modalidad === 'virtual'
@@ -52,6 +52,7 @@ export function CitaCard({ cita, actionLoading, onEstado, onVerificarPago, onOpe
           actionLoading={actionLoading}
           onEstado={onEstado}
           onVerificarPago={onVerificarPago}
+          onReagendar={onReagendar}
           onOpenVoucher={onOpenVoucher}
         />
       </div>

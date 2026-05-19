@@ -212,12 +212,36 @@ export async function resolveHandoff(conversacion_id) {
  */
 export async function actualizarEstadoCita(cita_id, estado) {
   const supabase = await createServerSupabaseClient()
-  
+
   const { error } = await supabase
     .from('citas')
     .update({ estado })
     .eq('id', cita_id)
-    
+
+  if (error) return { error: error.message }
+  return { success: true }
+}
+
+/**
+ * Reagendar una cita (cambia fecha y hora). No toca estado.
+ */
+export async function reagendarCita(cita_id, nueva_fecha, nueva_hora) {
+  if (!cita_id || !nueva_fecha || !nueva_hora) {
+    return { error: 'Faltan datos (cita, fecha u hora).' }
+  }
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(nueva_fecha)) {
+    return { error: 'Fecha inválida (formato YYYY-MM-DD).' }
+  }
+  if (!/^\d{2}:\d{2}$/.test(nueva_hora)) {
+    return { error: 'Hora inválida (formato HH:MM).' }
+  }
+
+  const supabase = await createServerSupabaseClient()
+  const { error } = await supabase
+    .from('citas')
+    .update({ fecha: nueva_fecha, hora: nueva_hora })
+    .eq('id', cita_id)
+
   if (error) return { error: error.message }
   return { success: true }
 }

@@ -10,7 +10,7 @@ import { CitaCard } from '../components/CitaCard'
 import { CitasCalendar } from '../components/CitasCalendar'
 
 export function CitasTab() {
-  const { citas, loading, actionLoading, handleEstado, handleVerificarPago, openVoucher } = useCitas()
+  const { citas, loading, actionLoading, handleEstado, handleVerificarPago, handleReagendar, openVoucher } = useCitas()
 
   const today = new Date().toISOString().split('T')[0]
   const [estadoFiltro, setEstadoFiltro] = useState('todos')
@@ -139,6 +139,7 @@ export function CitasTab() {
           actionLoading={actionLoading}
           onEstado={handleEstado}
           onVerificarPago={handleVerificarPago}
+          onReagendar={handleReagendar}
           onOpenVoucher={openVoucher}
           emptyMessage={emptyMessage}
         />
@@ -157,6 +158,7 @@ export function CitasTab() {
               actionLoading={actionLoading}
               onEstado={handleEstado}
               onVerificarPago={handleVerificarPago}
+              onReagendar={handleReagendar}
               onOpenVoucher={openVoucher}
             />
           ))

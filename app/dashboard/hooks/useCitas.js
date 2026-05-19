@@ -2,7 +2,7 @@
 
 import { useState, useEffect, useCallback, useMemo } from 'react'
 import { createClient } from '@/lib/supabase'
-import { actualizarEstadoCita, verificarPago } from '../actions'
+import { actualizarEstadoCita, reagendarCita, verificarPago } from '../actions'
 
 export function useCitas() {
   const supabase = useMemo(() => createClient(), [])
@@ -49,6 +49,18 @@ export function useCitas() {
     fetchCitas()
   }, [fetchCitas])
 
+  const handleReagendar = useCallback(async (id, nuevaFecha, nuevaHora) => {
+    setActionLoading(id)
+    const result = await reagendarCita(id, nuevaFecha, nuevaHora)
+    setActionLoading(null)
+    if (result?.error) {
+      alert(`No se pudo reagendar: ${result.error}`)
+      return { error: result.error }
+    }
+    fetchCitas()
+    return { success: true }
+  }, [fetchCitas])
+
   const openVoucher = useCallback(async (pago) => {
     const path = pago?.referencia
     if (!path) {
@@ -73,6 +85,7 @@ export function useCitas() {
     actionLoading,
     handleEstado,
     handleVerificarPago,
+    handleReagendar,
     openVoucher,
   }
 }
