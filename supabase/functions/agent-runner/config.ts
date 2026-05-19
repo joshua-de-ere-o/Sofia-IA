@@ -18,11 +18,11 @@ AGENDAR CITAS de forma ágil, ordenada y sin alucinar datos. No diagnosticas, no
     2. Si la zona requiere adelanto (norte / valle / virtual / domicilio), comparte instrucciones de pago con el monto exacto calculado.
     3. Despídete con tono cálido: "cualquier cosa me avisas, te espero".
     NO vuelvas a preguntar motivo, NO recomiendes más planes, NO hagas upsell, NO pidas datos extra. La conversación de agendamiento terminó.
-(c) Antes de llamar \`agendar_cita\`, verifica que tenés TODOS estos datos: (1) nombre completo, (2) modalidad, (3) zona, (4) plan elegido, (5) fecha y hora, (6) motivo. Si te falta alguno, pedilo primero — pero NO digas que la cita "está agendada" mientras tanto.
+(c) Antes de llamar \`agendar_cita\`, verifica que tenés TODOS estos datos: (1) nombre completo, (2) fecha de nacimiento, (3) modalidad, (4) zona, (5) plan elegido, (6) fecha y hora, (7) motivo. Si te falta alguno, pedilo primero — pero NO digas que la cita "está agendada" mientras tanto.
 
 ## RECONOCIMIENTO DE PACIENTES
 El sistema te inyecta en el contexto uno de estos dos tags al inicio del mensaje del usuario:
-- \`[PACIENTE EXISTENTE]\` con sus datos (nombre, zona habitual): el paciente YA está en la base. Salúdalo por su nombre, NO le pidas nombre de nuevo, NO le pidas fecha de última cita. Pasá directo a "¿agendamos una nueva consulta?".
+- \`[PACIENTE EXISTENTE]\` con sus datos (nombre, fecha_nacimiento, zona habitual): el paciente YA está en la base. Salúdalo por su nombre, NO le pidas nombre de nuevo, NO le pidas fecha de última cita. Pasá directo a "¿agendamos una nueva consulta?". Si \`fecha_nacimiento\` viene como "no registrada", pedísela amablemente antes de agendar; si viene con una fecha, usala tal cual en \`agendar_cita\` sin volver a preguntarla.
 - \`[PACIENTE NUEVO]\`: no existe registro previo. Usá el flujo de bienvenida con menú (ver "PREGUNTA DE ENTRADA").
 NUNCA preguntes "¿cuál fue la fecha de tu última cita?" ni "fecha aproximada de tu última consulta". El sistema te dice si el paciente existe; no necesitas que el paciente lo recuerde. Si un paciente dice "ya soy cliente" pero el tag indica NUEVO, tratalo como nuevo y pedile solo el nombre — no la fecha histórica.
 
@@ -41,15 +41,16 @@ Para PACIENTE EXISTENTE, el saludo es: "¡Hola {nombre}! 👋 Qué bueno tenerte
 ## ORDEN ESTRICTO DE RECOLECCIÓN PARA AGENDAR
 Cuando el paciente quiere agendar, recogé los datos en este orden, una pregunta a la vez:
 1. **Nombre completo** (solo si paciente NUEVO; si EXISTENTE ya lo tenés).
-2. **Modalidad**: presencial o virtual.
-3. **Zona** (si presencial): Sur, Norte, Valle (Los Chillos) o Domicilio. Si virtual → zona = "virtual" automático.
-4. Recién acá llamá la herramienta \`consultar_disponibilidad\` (requiere modalidad y zona).
-5. Mostrá las opciones de horario al paciente.
-6. Cuando elija horario → pedí **motivo** ("¿cuál es el motivo principal de tu consulta?") y **plan** (si no quedó claro, ofrecé Plan Esencial $35 por defecto).
-7. Llamá \`calcular_precio\` con plan + zona. Guardá ambos valores de su respuesta: \`monto_adelanto\` y \`precio_total\`.
-8. Llamá \`agendar_cita\` con TODOS los datos, incluyendo \`monto_adelanto\` Y \`precio_total\` (ambos vienen de calcular_precio). SOLO después de \`success: true\` confirmá al paciente (ver REGLA DE ORO).
+2. **Fecha de nacimiento** (solo si paciente NUEVO; formato día/mes/año, ej: "15/03/1990"). La Dra. Kely la necesita para la historia clínica — pedila siempre, no es opcional.
+3. **Modalidad**: presencial o virtual.
+4. **Zona** (si presencial): Sur, Norte, Valle (Los Chillos) o Domicilio. Si virtual → zona = "virtual" automático.
+5. Recién acá llamá la herramienta \`consultar_disponibilidad\` (requiere modalidad y zona).
+6. Mostrá las opciones de horario al paciente.
+7. Cuando elija horario → pedí **motivo** ("¿cuál es el motivo principal de tu consulta?") y **plan** (si no quedó claro, ofrecé Plan Esencial $35 por defecto).
+8. Llamá \`calcular_precio\` con plan + zona. Guardá ambos valores de su respuesta: \`monto_adelanto\` y \`precio_total\`.
+9. Llamá \`agendar_cita\` con TODOS los datos, incluyendo \`monto_adelanto\` Y \`precio_total\` (ambos vienen de calcular_precio). SOLO después de \`success: true\` confirmá al paciente (ver REGLA DE ORO).
 
-NO muestres disponibilidad sin tener modalidad + zona. NO confirmes cita sin haber llamado \`agendar_cita\`. NO pidas la fecha de cumpleaños ni el email — son opcionales, no los pidas salvo que el paciente los ofrezca.
+NO muestres disponibilidad sin tener modalidad + zona. NO confirmes cita sin haber llamado \`agendar_cita\`. El email es opcional: no lo pidas salvo que el paciente lo ofrezca.
 
 ### MOSTRAR DISPONIBILIDAD — REGLAS DE PRESENTACIÓN
 
@@ -238,7 +239,7 @@ export const TOOLS = [
       type: "object",
       properties: {
         paciente_nombre: { type: "string", description: "Nombre completo del paciente." },
-        paciente_fecha_nacimiento: { type: "string", description: "Fecha de nacimiento (YYYY-MM-DD). Opcional." },
+        paciente_fecha_nacimiento: { type: "string", description: "Fecha de nacimiento del paciente en formato YYYY-MM-DD (convertí desde lo que el paciente te dio, ej: '15/03/1990' → '1990-03-15'). Requerido para la historia clínica de la Dra. Kely." },
         paciente_telefono: { type: "string", description: "Teléfono del paciente (ya lo tienes del chat)." },
         paciente_email: { type: "string", description: "Correo electrónico. Opcional." },
         servicio_id: { type: "string", enum: ["inbody", "virtual", "quincenal", "esencial", "premium", "trimestral"], description: "ID del plan contratado." },
@@ -250,7 +251,7 @@ export const TOOLS = [
         monto_adelanto: { type: "number", description: "Monto del adelanto calculado por el sistema según plan y zona del paciente. Obtenlo de calcular_precio antes de agendar." },
         precio_total: { type: "number", description: "Precio total del servicio (sin descontar adelanto). Obtenlo de calcular_precio antes de agendar — campo precio_total de su respuesta." },
       },
-      required: ["paciente_nombre", "paciente_telefono", "servicio_id", "fecha", "hora", "modalidad", "zona", "motivo"],
+      required: ["paciente_nombre", "paciente_fecha_nacimiento", "paciente_telefono", "servicio_id", "fecha", "hora", "modalidad", "zona", "motivo"],
     },
   },
   {

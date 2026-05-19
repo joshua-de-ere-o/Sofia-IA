@@ -144,7 +144,7 @@ Deno.serve(async (req: Request) => {
     // Inyectamos contexto temporal, identidad del paciente y memoria condensada (si existe).
     const nowGuayaquil = new Date().toLocaleString("es-EC", { timeZone: "America/Guayaquil" });
     const pacienteCtx = pacienteExistente
-      ? `\n\n[PACIENTE EXISTENTE]: nombre="${pacienteExistente.nombre}", zona_habitual="${pacienteExistente.zona ?? 'no registrada'}"`
+      ? `\n\n[PACIENTE EXISTENTE]: nombre="${pacienteExistente.nombre}", fecha_nacimiento="${pacienteExistente.fecha_nacimiento ?? 'no registrada'}", zona_habitual="${pacienteExistente.zona ?? 'no registrada'}"`
       : `\n\n[PACIENTE NUEVO — no existe registro previo en el sistema]`;
     const memoryContext = conv.historial_resumido ? `\n\n[ESTADO PREVIO DE LA CONVERSACIÓN]:\n${conv.historial_resumido}` : "";
 
