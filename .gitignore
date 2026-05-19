@@ -42,3 +42,8 @@ next-env.d.ts
 .mcp.json
 
 .vercel
+
+# notas y tooling local (no se versionan)
+.atl/
+inventario-sistema-v1.md
+plan-correcciones-mayo.md
