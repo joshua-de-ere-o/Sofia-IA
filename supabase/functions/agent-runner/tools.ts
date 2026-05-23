@@ -6,44 +6,81 @@ import { createClient } from "jsr:@supabase/supabase-js";
  * Implementación de las herramientas para el Agent Loop de Sofía.
  */
 
-// URL del propio proyecto de supabase para llamar a edge functions internas
-const SUPABASE_URL = Deno.env.get("SUPABASE_URL") || "";
-const SUPABASE_ANON_KEY = Deno.env.get("SUPABASE_ANON_KEY") || "";
+// Catálogo de servicios y reglas de precio.
+// Duplicado intencional con lib/servicios.js (Next.js) y calcular-precio/index.ts
+// porque Deno no puede importar módulos Node fuera de este directorio. Si cambian
+// precios, sincronizar los tres lugares.
+const CATALOG: Record<string, number> = {
+  inbody: 20,
+  virtual: 20,
+  quincenal: 25,
+  mensual: 35,
+  premium: 70,
+  trimestral: 90,
+};
+
+const ZONAS_VALIDAS = ["sur", "norte", "virtual", "valle", "domicilio"];
 
 /**
- * Llama a la Edge Function 'calcular-precio' previamente construida.
- * Devuelve un string JSON para el LLM.
+ * Calcula precio y adelanto de forma 100% determinística (sin red, sin auth).
+ * Antes era una Edge Function HTTP (calcular-precio); fallaba con 401 al ser
+ * invocada desde dentro del agent-runner. Movida acá como función pura.
  */
 export async function executeCalcularPrecio(args: any): Promise<string> {
   const { servicio_id, zona } = args;
-  
+
   if (!servicio_id || !zona) {
     return JSON.stringify({ error: "Faltan parámetros: servicio_id o zona" });
   }
 
-  try {
-    const url = `${SUPABASE_URL}/functions/v1/calcular-precio`;
-    const res = await fetch(url, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'Authorization': `Bearer ${SUPABASE_ANON_KEY}`
-      },
-      body: JSON.stringify({ servicio_id, zona })
+  if (!(servicio_id in CATALOG)) {
+    return JSON.stringify({
+      error: "servicio_id inválido",
+      received: servicio_id,
+      allowed: Object.keys(CATALOG),
     });
-
-    if (!res.ok) {
-      const errBody = await res.text();
-      console.error("Error from calcular-precio function:", errBody);
-      return JSON.stringify({ error: `Fallo al calcular precio: HTTP ${res.status}` });
-    }
-
-    const data = await res.json();
-    return JSON.stringify(data);
-  } catch (err: any) {
-    console.error("Fetch error calling calcular-precio:", err);
-    return JSON.stringify({ error: `Fallo interno al contactar calculador: ${err.message}` });
   }
+
+  if (!ZONAS_VALIDAS.includes(zona)) {
+    return JSON.stringify({
+      error: "zona inválida",
+      received: zona,
+      allowed: ZONAS_VALIDAS,
+    });
+  }
+
+  let precio_base = CATALOG[servicio_id];
+  let ajuste_zona = 0;
+  let precio_total = precio_base;
+  let requiere_adelanto = true;
+  let monto_adelanto = 0;
+
+  if (zona === "domicilio") {
+    // Tarifa flat de $40 total para domicilio — precio_base se iguala al total para consistencia
+    precio_base = 40;
+    precio_total = 40;
+    ajuste_zona = 0;
+  } else if (zona === "valle") {
+    ajuste_zona = 5;
+    precio_total += ajuste_zona;
+  }
+
+  if (zona === "sur") {
+    requiere_adelanto = false;
+    monto_adelanto = 0;
+  } else if (zona === "domicilio") {
+    monto_adelanto = 20; // 50% de 40
+  } else {
+    monto_adelanto = precio_total * 0.5;
+  }
+
+  return JSON.stringify({
+    precio_base,
+    ajuste_zona,
+    precio_total,
+    requiere_adelanto,
+    monto_adelanto,
+  });
 }
 
 function getSupabase() {
@@ -98,7 +135,12 @@ export async function executeConsultarDisponibilidad(args: any): Promise<string>
     const endObj = new Date(fecha_fin + "T00:00:00");
     let current = new Date(startObj);
     
-    let slotsLibres: Record<string, string[]> = {};
+    // Nombres de día indexados por getDay() (0=domingo). Se usa el MISMO getDay()
+    // que decide los slots, así el nombre nunca puede quedar desfasado de la lógica
+    // ni sufrir el corrimiento de zona horaria al re-parsear/formatear la fecha.
+    const DIAS_SEMANA = ["domingo", "lunes", "martes", "miércoles", "jueves", "viernes", "sábado"];
+
+    let slotsLibres: Record<string, { dia_semana: string; horarios: string[] }> = {};
     let dayCount = 0;
 
     // Para evitar dar slots en el pasado el día de "hoy"
@@ -135,7 +177,7 @@ export async function executeConsultarDisponibilidad(args: any): Promise<string>
         });
 
         if (validSlots.length > 0) {
-          slotsLibres[dateStr] = validSlots;
+          slotsLibres[dateStr] = { dia_semana: DIAS_SEMANA[dayOfWeek], horarios: validSlots };
         }
       }
 
@@ -162,6 +204,10 @@ export async function executeAgendarCita(args: any, context: any): Promise<strin
 
   if (!paciente_nombre || !paciente_telefono || !servicio_id || !fecha || !hora || !modalidad || !zona) {
     return JSON.stringify({ error: "Faltan parámetros requeridos para agendar la cita" });
+  }
+
+  if (typeof precio_total !== "number" || typeof monto_adelanto !== "number") {
+    return JSON.stringify({ error: "Faltan precio_total o monto_adelanto calculados. Primero llama calcular_precio y usa sus valores exactos." });
   }
 
   try {
@@ -236,8 +282,8 @@ export async function executeAgendarCita(args: any, context: any): Promise<strin
         modalidad: modalidad,
         motivo: motivo,
         zona: zona,
-        monto_adelanto: monto_adelanto || 0,
-        monto_total: precio_total ?? null
+        monto_adelanto: monto_adelanto,
+        monto_total: precio_total
       })
       .select()
       .single();

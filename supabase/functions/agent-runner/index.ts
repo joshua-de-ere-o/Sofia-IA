@@ -44,6 +44,50 @@ function tailWindow(history: any[], target = 8): any[] {
   return history.slice(start);
 }
 
+/**
+ * Lee `datos_bancarios` de la tabla `configuracion`, con cache de 60s para
+ * no hacer una query a Postgres por turno. Si el CRM actualiza los datos,
+ * tarda hasta 60s en propagar — aceptable.
+ *
+ * Devuelve null si no hay datos cargados; en ese caso NO se inyecta el
+ * bloque al contexto (el agente sigue funcionando, solo no podrá compartir
+ * datos bancarios — graceful degradation).
+ */
+let _cachedDatosBancarios: any = null;
+let _cachedDatosBancariosAt = 0;
+const DATOS_BANCARIOS_CACHE_MS = 60_000;
+
+async function getDatosBancarios(supabase: any): Promise<any | null> {
+  if (_cachedDatosBancarios !== null && Date.now() - _cachedDatosBancariosAt < DATOS_BANCARIOS_CACHE_MS) {
+    return _cachedDatosBancarios;
+  }
+  try {
+    const { data } = await supabase
+      .from("configuracion")
+      .select("datos_bancarios")
+      .eq("id", 1)
+      .single();
+    _cachedDatosBancarios = data?.datos_bancarios ?? null;
+    _cachedDatosBancariosAt = Date.now();
+    return _cachedDatosBancarios;
+  } catch (err) {
+    console.warn("[Agent-Runner] No se pudieron leer datos_bancarios:", err);
+    return null;
+  }
+}
+
+function formatDatosBancariosForLLM(db: any): string {
+  if (!db || typeof db !== "object") return "";
+  const lines: string[] = [];
+  if (db.banco) lines.push(`Banco: ${String(db.banco).trim()}`);
+  if (db.tipo_cuenta) lines.push(`Tipo de cuenta: ${db.tipo_cuenta}`);
+  if (db.numero) lines.push(`Número de cuenta: ${db.numero}`);
+  if (db.titular) lines.push(`Titular: ${db.titular}`);
+  if (db.cedula) lines.push(`Cédula del titular: ${db.cedula}`);
+  if (lines.length === 0) return "";
+  return `\n\n[DATOS BANCARIOS PARA TRANSFERENCIAS — usá EXACTAMENTE estos cuando el paciente deba pagar adelanto]:\n${lines.join("\n")}`;
+}
+
 async function sendWhatsAppResponse(to: string, text: string) {
   const apiKey = Deno.env.get("YCLOUD_API_KEY");
   const from = Deno.env.get("YCLOUD_PHONE_NUMBER_ID");
@@ -142,15 +186,22 @@ Deno.serve(async (req: Request) => {
     let history: any[] = Array.isArray(conv.mensajes_raw) ? conv.mensajes_raw : [];
 
     // Inyectamos contexto temporal, identidad del paciente y memoria condensada (si existe).
-    const nowGuayaquil = new Date().toLocaleString("es-EC", { timeZone: "America/Guayaquil" });
+    const nowGuayaquil = new Date().toLocaleString("es-EC", {
+      timeZone: "America/Guayaquil",
+      weekday: "long", year: "numeric", month: "long", day: "numeric",
+      hour: "2-digit", minute: "2-digit",
+    });
     const pacienteCtx = pacienteExistente
       ? `\n\n[PACIENTE EXISTENTE]: nombre="${pacienteExistente.nombre}", fecha_nacimiento="${pacienteExistente.fecha_nacimiento ?? 'no registrada'}", zona_habitual="${pacienteExistente.zona ?? 'no registrada'}"`
       : `\n\n[PACIENTE NUEVO — no existe registro previo en el sistema]`;
     const memoryContext = conv.historial_resumido ? `\n\n[ESTADO PREVIO DE LA CONVERSACIÓN]:\n${conv.historial_resumido}` : "";
 
+    const datosBancarios = await getDatosBancarios(supabase);
+    const datosBancariosCtx = formatDatosBancariosForLLM(datosBancarios);
+
     const userMessage = {
       role: 'user',
-      content: `[CONTEXTO SISTEMA: Hora actual: ${nowGuayaquil}]${pacienteCtx}${memoryContext}\n\n[MENSAJE DEL USUARIO]:\n${text}`
+      content: `[CONTEXTO SISTEMA: Hora actual: ${nowGuayaquil}]${pacienteCtx}${memoryContext}${datosBancariosCtx}\n\n[MENSAJE DEL USUARIO]:\n${text}`
     };
 
     history.push(userMessage);
