@@ -46,13 +46,15 @@ Cuando el paciente quiere agendar, recogé los datos en este orden, una pregunta
 4. **Zona** (si presencial): Sur, Norte, Valle (Los Chillos) o Domicilio. Si virtual → zona = "virtual" automático.
 5. Recién acá llamá la herramienta \`consultar_disponibilidad\` (requiere modalidad y zona).
 6. Mostrá las opciones de horario al paciente.
-7. Cuando elija horario → pedí **motivo** ("¿cuál es el motivo principal de tu consulta?") y **plan** (si no quedó claro, ofrecé Plan Esencial $35 por defecto).
+7. Cuando elija horario → pedí **motivo** ("¿cuál es el motivo principal de tu consulta?") y **plan** (si no quedó claro, ofrecé Plan Mensual $35 por defecto).
 8. Llamá \`calcular_precio\` con plan + zona. Guardá ambos valores de su respuesta: \`monto_adelanto\` y \`precio_total\`.
 9. Llamá \`agendar_cita\` con TODOS los datos, incluyendo \`monto_adelanto\` Y \`precio_total\` (ambos vienen de calcular_precio). SOLO después de \`success: true\` confirmá al paciente (ver REGLA DE ORO).
 
 NO muestres disponibilidad sin tener modalidad + zona. NO confirmes cita sin haber llamado \`agendar_cita\`. El email es opcional: no lo pidas salvo que el paciente lo ofrezca.
 
 ### MOSTRAR DISPONIBILIDAD — REGLAS DE PRESENTACIÓN
+
+Cuando uses el resultado de consultar_disponibilidad, el nombre del día sale del campo dia_semana devuelto por la herramienta. USALO TAL CUAL. No recalcules ni adivines el día de la semana a partir de la fecha YYYY-MM-DD, porque puede correrse por zona horaria y mostrar un día incorrecto al paciente.
 
 **Caso A — Paciente flexible (no propuso fecha ni hora concreta):**
 Mostrá disponibilidad de UNA sola semana (de lunes a sábado del rango pedido). NO listes dos semanas en un solo mensaje. Si el paciente pide más opciones después, ahí ampliás a la semana siguiente — nunca antes.
@@ -64,22 +66,23 @@ Mostrá disponibilidad de UNA sola semana (de lunes a sábado del rango pedido).
 4. SOLO si el día completo está lleno → ofrecé el día más cercano disponible. Nunca saltes a otro día sin antes haber agotado el día que el paciente eligió.
 
 ## REGLA ANTI-LOOP
-Si el paciente repite la MISMA intención dos veces seguidas ("quiero agendar", "agendar cita", "solo quiero la cita"), DEJÁ de pedir contexto adicional y AVANZÁ al siguiente dato de la lista de recolección. Asumí Plan Esencial ($35) por defecto si no lo eligió. No insistas con la pregunta de objetivo si el paciente claramente no quiere responderla.
+Si el paciente repite la MISMA intención dos veces seguidas ("quiero agendar", "agendar cita", "solo quiero la cita"), DEJÁ de pedir contexto adicional y AVANZÁ al siguiente dato de la lista de recolección. Asumí Plan Mensual ($35) por defecto si no lo eligió. No insistas con la pregunta de objetivo si el paciente claramente no quiere responderla.
 
 ## LÓGICA DE ORIENTACIÓN (cuando el paciente sí quiere consejo de plan)
 1. Si el paciente describe un objetivo (bajar de peso, deporte, etc.), recomienda UN plan con su beneficio principal — no listes todos.
-2. Si no especifica objetivo → Plan Esencial ($35) por defecto.
+2. Si no especifica objetivo → Plan Mensual ($35) por defecto.
 3. Zona y modalidad se preguntan conversacionalmente, no como interrogatorio.
 
 ## CATÁLOGO DE SERVICIOS
 - Evaluación InBody 270: $20 (extra complementario)
 - Consulta Virtual: $20 (atención remota)
 - Plan Quincenal: $25 (15 días)
-- Plan Esencial ⭐: $35 (plan base por defecto)
-- Plan Mensual Premium: $70 (más completo)
+- Plan Mensual ⭐: $35 (plan base por defecto)
+- Plan Premium: $70 (más completo)
 - Plan Trimestral: $90 (3 meses)
 
 Regla: Ninguna consulta se vende independiente — siempre dentro de un plan.
+Regla de nombres: si el paciente dice "mensual", interpreta SIEMPRE Plan Mensual ($35). El plan de $70 se llama Plan Premium; nunca lo llames ni lo interpretes como "Mensual Premium".
 
 ## REGLAS DE ZONA Y ADELANTO
 - Sur de Quito: sin adelanto, cita confirmada directo.
@@ -184,7 +187,7 @@ export const TOOLS = [
   {
     name: "consultar_disponibilidad",
     description:
-      "Consulta los slots de agenda disponibles para agendar una cita con la Dra. Kely León. Retorna un array de fechas y horarios libres dentro de la ventana de 14 días.",
+      "Consulta los slots de agenda disponibles para agendar una cita con la Dra. Kely León. Retorna un objeto cuyas claves son fechas (YYYY-MM-DD) y cuyo valor es { dia_semana, horarios }. El campo dia_semana ya viene calculado por el servidor (ej: 'viernes'); USALO TAL CUAL al hablar con el paciente. NUNCA calcules ni adivines el día de la semana a partir de la fecha: usá siempre el dia_semana que devuelve esta función.",
     input_schema: {
       type: "object",
       properties: {
@@ -219,7 +222,7 @@ export const TOOLS = [
       properties: {
         servicio_id: {
           type: "string",
-          enum: ["inbody", "virtual", "quincenal", "esencial", "premium", "trimestral"],
+          enum: ["inbody", "virtual", "quincenal", "mensual", "premium", "trimestral"],
           description: "ID del plan de nutrición.",
         },
         zona: {
@@ -242,7 +245,7 @@ export const TOOLS = [
         paciente_fecha_nacimiento: { type: "string", description: "Fecha de nacimiento del paciente en formato YYYY-MM-DD (convertí desde lo que el paciente te dio, ej: '15/03/1990' → '1990-03-15'). Requerido para la historia clínica de la Dra. Kely." },
         paciente_telefono: { type: "string", description: "Teléfono del paciente (ya lo tienes del chat)." },
         paciente_email: { type: "string", description: "Correo electrónico. Opcional." },
-        servicio_id: { type: "string", enum: ["inbody", "virtual", "quincenal", "esencial", "premium", "trimestral"], description: "ID del plan contratado." },
+        servicio_id: { type: "string", enum: ["inbody", "virtual", "quincenal", "mensual", "premium", "trimestral"], description: "ID del plan contratado." },
         fecha: { type: "string", description: "Fecha de la cita (YYYY-MM-DD)." },
         hora: { type: "string", description: "Hora de la cita (HH:MM)." },
         modalidad: { type: "string", enum: ["presencial", "virtual"], description: "Modalidad." },
@@ -251,7 +254,7 @@ export const TOOLS = [
         monto_adelanto: { type: "number", description: "Monto del adelanto calculado por el sistema según plan y zona del paciente. Obtenlo de calcular_precio antes de agendar." },
         precio_total: { type: "number", description: "Precio total del servicio (sin descontar adelanto). Obtenlo de calcular_precio antes de agendar — campo precio_total de su respuesta." },
       },
-      required: ["paciente_nombre", "paciente_fecha_nacimiento", "paciente_telefono", "servicio_id", "fecha", "hora", "modalidad", "zona", "motivo"],
+      required: ["paciente_nombre", "paciente_fecha_nacimiento", "paciente_telefono", "servicio_id", "fecha", "hora", "modalidad", "zona", "motivo", "monto_adelanto", "precio_total"],
     },
   },
   {

@@ -176,15 +176,19 @@ export async function POST(req) {
       if (result.context) body.context = result.context;
 
       console.log(`[Webhook] → agent-runner (${senderNumber})`);
-      fetch(agentUrl, {
+      const agentRes = await fetch(agentUrl, {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
           Authorization: `Bearer ${process.env.SUPABASE_SERVICE_ROLE_KEY}`,
         },
         body: JSON.stringify(body),
-        keepalive: true,
-      }).catch((err) => console.error("Error invocando a agent-runner:", err));
+      });
+
+      if (!agentRes.ok) {
+        const errorBody = await agentRes.text().catch(() => "");
+        console.error(`[Webhook] agent-runner falló (${agentRes.status}) para ${senderNumber}:`, errorBody);
+      }
     }
 
     return NextResponse.json({ received: true });

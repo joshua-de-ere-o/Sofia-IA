@@ -319,7 +319,7 @@ Cuando un paciente escribe por primera vez: "¿Qué te trajo por aquí hoy, qué
 ## LÓGICA DE ORIENTACIÓN
 1. Con la respuesta del paciente, identifica: objetivo → plan que encaja → modalidad → zona → disponibilidad.
 2. Presenta UN plan con su beneficio principal — no listes todos los planes.
-3. Si el paciente no especifica → Plan Esencial ($35) primero.
+3. Si el paciente no especifica → Plan Mensual ($35) primero.
 4. Zona y modalidad se preguntan conversacionalmente, no como interrogatorio.
 5. Cierra con opciones de horario concretas dentro de los próximos 14 días.
 
@@ -327,8 +327,8 @@ Cuando un paciente escribe por primera vez: "¿Qué te trajo por aquí hoy, qué
 - Evaluación InBody 270: $20 (extra complementario)
 - Consulta Virtual: $20 (atención remota)
 - Plan Quincenal: $25 (15 días)
-- Plan Esencial ⭐: $35 (plan base por defecto)
-- Plan Mensual Premium: $70 (más completo)
+- Plan Mensual ⭐: $35 (plan base por defecto)
+- Plan Premium: $70 (más completo)
 - Plan Trimestral: $90 (3 meses)
 
 Regla: Ninguna consulta se vende independiente — siempre dentro de un plan.
@@ -443,7 +443,7 @@ Definidas en [supabase/functions/agent-runner/config.ts](supabase/functions/agen
 | Tool | Parámetros (required en **negrita**) | Implementación |
 |---|---|---|
 | `consultar_disponibilidad` | **fecha_inicio** (YYYY-MM-DD), **fecha_fin** (≤ hoy+14d), modalidad (`presencial|virtual`) | Lee citas + feriados, arma slots mañana/tarde, excluye domingos y pasado. |
-| `calcular_precio` | **servicio_id** (`inbody|virtual|quincenal|esencial|premium|trimestral`), **zona** (`sur|norte|virtual|valle|domicilio`) | Llama a Edge Function `calcular-precio`. |
+| `calcular_precio` | **servicio_id** (`inbody|virtual|quincenal|mensual|premium|trimestral`), **zona** (`sur|norte|virtual|valle|domicilio`) | Llama a Edge Function `calcular-precio`. |
 | `agendar_cita` | **paciente_nombre**, paciente_fecha_nacimiento, **paciente_telefono**, paciente_email, **servicio_id**, **fecha**, **hora**, **modalidad**, **zona**, **motivo**, monto_adelanto | Upsert paciente por tel, re-chequea slot, inserta cita (`confirmada` si sur, `pendiente_pago` si no), vincula conversación. |
 | `derivar_a_kelly` | **motivo**, nivel_urgencia (`alto|medio|bajo`), **historial_resumido** | Activa `handoff_activo`, crea row en `handoffs`, notifica a Telegram con inline keyboard. |
 | `cancelar_cita` | **motivo** | Busca cita futura, valida ≥24h, estado→`cancelada`. Si no cumple, devuelve `política_incumplida` al LLM. |

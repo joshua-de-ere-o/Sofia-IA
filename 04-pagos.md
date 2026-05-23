@@ -7,11 +7,11 @@
 | Evaluación InBody 270 | $20 | `inbody` |
 | Consulta Virtual | $20 | `virtual` |
 | Plan Quincenal | $25 | `quincenal` |
-| Plan Esencial ⭐ | $35 | `esencial` |
-| Plan Mensual Premium | $70 | `premium` |
+| Plan Mensual ⭐ | $35 | `mensual` |
+| Plan Premium | $70 | `premium` |
 | Plan Trimestral | $90 | `trimestral` |
 
-**Regla:** Ninguna consulta se vende independiente — siempre dentro de un plan. Plan Esencial es el default.
+**Regla:** Ninguna consulta se vende independiente — siempre dentro de un plan. Plan Mensual es el default. Si el paciente dice "mensual", corresponde a `mensual` ($35). El plan de $70 es `premium` y no debe llamarse "Mensual Premium".
 
 ## Lógica de Adelanto por Zona
 
@@ -25,7 +25,7 @@
 
 ### Ejemplos
 
-| Zona | Plan Esencial ($35) | Plan Premium ($70) |
+| Zona | Plan Mensual ($35) | Plan Premium ($70) |
 |---|---|---|
 | Sur | $0 | $0 |
 | Norte | $17.50 | $35 |
@@ -38,7 +38,7 @@
 **Input:**
 ```json
 {
-  "servicio_id": "esencial",
+  "servicio_id": "mensual",
   "zona": "valle"
 }
 ```

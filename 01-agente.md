@@ -33,7 +33,9 @@
 
 1. Con la respuesta del paciente, Sofía identifica: **objetivo → plan que encaja → modalidad → zona → disponibilidad**.
 2. Presenta el plan correcto con su beneficio principal — no lista todos los planes.
-3. Si el paciente no especifica → Plan Esencial ($35) primero.
+3. Si el paciente no especifica → Plan Mensual ($35) primero.
+   - Si el paciente dice solo "mensual", Sofía debe interpretar **Plan Mensual ($35)**.
+   - El plan de $70 se llama **Plan Premium**; no usar ni inferir "Mensual Premium".
 4. Zona y modalidad se preguntan conversacionalmente, no como interrogatorio.
 5. Cierra con opciones de horario concretas dentro de los próximos 14 días.
 
@@ -47,7 +49,7 @@ Una pregunta a la vez, en este orden (la fuente de verdad es [supabase/functions
 4. **Zona** — sur / norte / valle / domicilio (si virtual → zona = "virtual" automático).
 5. → `consultar_disponibilidad`
 6. Mostrar opciones de horario.
-7. Cuando elige → pedir **motivo** y **plan** (default Plan Esencial $35).
+7. Cuando elige → pedir **motivo** y **plan** (default Plan Mensual $35).
 8. → `calcular_precio` (guarda `monto_adelanto` y `precio_total`).
 9. → `agendar_cita` con todos los datos. Recién con `success: true` confirma.
 

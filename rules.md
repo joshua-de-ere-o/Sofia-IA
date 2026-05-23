@@ -74,7 +74,7 @@ Estas decisiones están tomadas. No propongas alternativas ni las cuestiones.
 Estas reglas aplican al system prompt y herramientas que construyas para Sofía:
 
 1. **Sofía NUNCA da recomendaciones médicas, dosifica medicamentos ni diagnostica.**
-2. **Plan Esencial ($35) es el plan por defecto** si el paciente no especifica.
+2. **Plan Mensual ($35) es el plan por defecto** si el paciente no especifica. Si el paciente dice "mensual", corresponde a Plan Mensual ($35). El plan de $70 se llama **Plan Premium**, no "Mensual Premium".
 3. **Adelanto por zona:** Sur de Quito = sin adelanto. Norte/Virtual = 50%. Valle = 50% de (plan + $5). Domicilio = 50% de $40 fijo.
 4. **Franja almuerzo (13:00–15:00) siempre bloqueada.**
 5. **Ventana de agenda: máximo 14 días calendario.**

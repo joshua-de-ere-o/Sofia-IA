@@ -82,7 +82,7 @@ Paciente → WhatsApp
 - Pregunta de entrada: "¿Qué te trajo por aquí hoy, qué estás buscando mejorar?"
 - Una pregunta a la vez, frases cortas, tuteo, emojis moderados.
 - Identifica: objetivo → plan adecuado → modalidad → zona → disponibilidad.
-- Si el paciente no especifica plan → presentar Plan Esencial ($35) por defecto.
+- Si el paciente no especifica plan → presentar Plan Mensual ($35) por defecto.
 - Detección de palabras clave médicas (medicamento, pastilla, inyección, fármaco) → escalar a doctora.
 
 **Criterios de aceptación:**
@@ -99,8 +99,8 @@ Paciente → WhatsApp
 | Evaluación InBody 270 | $20 | Extra complementario |
 | Consulta Virtual | $20 | Atención remota |
 | Plan Quincenal | $25 | 15 días |
-| **Plan Esencial ⭐** | **$35** | **Plan base por defecto** |
-| Plan Mensual Premium | $70 | Más completo |
+| **Plan Mensual ⭐** | **$35** | **Plan base por defecto** |
+| Plan Premium | $70 | Más completo |
 | Plan Trimestral | $90 | 3 meses |
 
 **Regla:** Ninguna consulta se vende independiente — siempre dentro de un plan.
