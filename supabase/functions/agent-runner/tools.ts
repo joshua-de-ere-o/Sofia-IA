@@ -1,5 +1,5 @@
 import { createClient } from "jsr:@supabase/supabase-js";
-import { getServicio, SERVICIO_IDS_TODOS } from "./config.ts";
+import { getServicio, SERVICIO_IDS_TODOS, DERIVACION_TEMPLATES } from "./config.ts";
 
 /**
  * supabase/functions/agent-runner/tools.ts
@@ -322,6 +322,8 @@ export async function executeAgendarCita(args: any, context: any): Promise<strin
 
 /**
  * Escala la consulta a Telegram para que Kelly atienda en persona (Handoff).
+ * Returns mensaje_paciente resolved from DERIVACION_TEMPLATES so the LLM
+ * sends the exact text without rewriting it.
  */
 export async function executeDerivarAKelly(args: any, context: any): Promise<string> {
   const { motivo, nivel_urgencia, historial_resumido } = args;
@@ -331,10 +333,16 @@ export async function executeDerivarAKelly(args: any, context: any): Promise<str
     return JSON.stringify({ error: "Motivo y resumen histórico son obligatorios" });
   }
 
+  // Resolve patient message from templates; fall back to default for unknown motivos
+  const mensaje_paciente =
+    (DERIVACION_TEMPLATES[motivo as string] ?? DERIVACION_TEMPLATES['default']) as string;
+  const mensaje_interno =
+    `Notificación enviada a la doctora. ENVÍA TEXTUAL este mensaje al paciente, sin reescribirlo: "${mensaje_paciente}"`;
+
   try {
     const supabase = getSupabase();
 
-    // 1. Activar Handoff en la conversación
+    // 1. Activate handoff on conversation
     if (conversacion_id) {
       await supabase
         .from('conversaciones')
@@ -342,10 +350,9 @@ export async function executeDerivarAKelly(args: any, context: any): Promise<str
         .eq('id', conversacion_id);
     }
 
-    // 2. Crear registro de Handoff
-    let handoffId = null;
+    // 2. Create handoff record
     if (paciente_id && conversacion_id) {
-      const { data: handoffData } = await supabase
+      await supabase
         .from('handoffs')
         .insert({
           conversacion_id: conversacion_id,
@@ -356,13 +363,9 @@ export async function executeDerivarAKelly(args: any, context: any): Promise<str
         })
         .select('id')
         .single();
-      if (handoffData) handoffId = handoffData.id;
     }
 
-    // 3. Notificar a Telegram
-    // Invocaremos al webhook de Telegram u optaremos por fetch directo a la api si telegram.js es importable localmente 
-    // Para Deno es mejor un POST a una internal route de Telegram si existe, pero como telegram.js está en /lib,
-    // es un módulo Node de Next. Llamemos al bot directo desde aquí (necesitamos el token).
+    // 3. Notify via Telegram
     const telegramToken = Deno.env.get("TELEGRAM_BOT_TOKEN");
     const chatId = Deno.env.get("TELEGRAM_CHAT_ID");
 
@@ -379,24 +382,26 @@ export async function executeDerivarAKelly(args: any, context: any): Promise<str
 Por favor, contesta a este paciente desde tu WhatsApp Business oficial ahora.
 `.trim();
 
-      const options = {
-         reply_markup: {
-           inline_keyboard: [
-              [{ text: "✅ Terminé la atención (Retomar IA)", callback_data: `handoff_done_${conversacion_id || 'none'}` }]
-           ]
-         }
-      };
-
       await fetch(url, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ chat_id: chatId, text: txt, parse_mode: "HTML", reply_markup: options.reply_markup })
+        body: JSON.stringify({
+          chat_id: chatId,
+          text: txt,
+          parse_mode: "HTML",
+          reply_markup: {
+            inline_keyboard: [
+              [{ text: "✅ Terminé la atención (Retomar IA)", callback_data: `handoff_done_${conversacion_id || 'none'}` }]
+            ]
+          }
+        })
       });
     }
 
     return JSON.stringify({
       success: true,
-      mensaje_interno: "Notificación enviada a la doctora. Indica al usuario educadamente que será contactado brevemente por ella y detén la conversación."
+      mensaje_paciente,
+      mensaje_interno,
     });
 
   } catch (err: any) {
