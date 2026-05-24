@@ -68,21 +68,21 @@
 
 *‡ Pendiente confirmar zonas y si hay modalidad virtual (OQ-1)*
 
-### Servicios derivados (NO se agendan automáticamente)
+### Programas Especiales (consulta directa con la doctora)
 
-Estos servicios no se pueden agendar a través de Sofía. Cuando un paciente los solicita, Sofía deriva directamente con la Dra. Kely.
+Estos programas existen y se ofrecen, pero requieren conversación previa con la Dra. Kely — no se agendan por chat. Sofía los menciona en el listado del catálogo y deriva al paciente para que la doctora coordine directamente.
 
 **Reducción de Medidas** (`reduccion_medidas`)
 
-Programa personalizado de reducción de medidas. Tres niveles de inversión:
+Tratamiento integral con tres opciones según duración:
 
-| Nivel | Precio aproximado | Descripción |
-|---|---|---|
-| Básico | $400 | — |
-| Intermedio | $1.000 | — |
-| Avanzado | $1.950 | — |
+| Duración | Precio |
+|---|---|
+| 1 mes | $400 |
+| 3 meses | $1.000 |
+| 6 meses | $1.950 |
 
-*El detalle exacto de qué incluye cada nivel está pendiente de confirmación (OQ-4).*
+*El detalle exacto de qué incluye cada nivel está pendiente de confirmación con la doctora (OQ-4).*
 
 **Taller Empresarial** (`taller_empresarial`)
 
