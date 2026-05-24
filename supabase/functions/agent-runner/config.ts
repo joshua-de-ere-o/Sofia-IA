@@ -60,7 +60,7 @@ export const CATALOGO_SERVICIOS: Record<string, Servicio> = {
   alimentario_exclusivo: {
     id: 'alimentario_exclusivo',
     label: 'Plan Alimentario Exclusivo',
-    precio: 100,
+    precio: 70,
     duracion_min: 60,
     categoria: 'alimentario',
     agendable: true,
