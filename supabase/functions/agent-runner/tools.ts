@@ -1,23 +1,11 @@
 import { createClient } from "jsr:@supabase/supabase-js";
+import { getServicio, SERVICIO_IDS_TODOS } from "./config.ts";
 
 /**
  * supabase/functions/agent-runner/tools.ts
  *
  * Implementación de las herramientas para el Agent Loop de Sofía.
  */
-
-// Catálogo de servicios y reglas de precio.
-// Duplicado intencional con lib/servicios.js (Next.js) y calcular-precio/index.ts
-// porque Deno no puede importar módulos Node fuera de este directorio. Si cambian
-// precios, sincronizar los tres lugares.
-const CATALOG: Record<string, number> = {
-  inbody: 20,
-  virtual: 20,
-  quincenal: 25,
-  mensual: 35,
-  premium: 70,
-  trimestral: 90,
-};
 
 const ZONAS_VALIDAS = ["sur", "norte", "virtual", "valle", "domicilio"];
 
@@ -33,11 +21,12 @@ export async function executeCalcularPrecio(args: any): Promise<string> {
     return JSON.stringify({ error: "Faltan parámetros: servicio_id o zona" });
   }
 
-  if (!(servicio_id in CATALOG)) {
+  const servicio = getServicio(servicio_id);
+  if (!servicio) {
     return JSON.stringify({
-      error: "servicio_id inválido",
-      received: servicio_id,
-      allowed: Object.keys(CATALOG),
+      error: "SERVICIO_DESCONOCIDO",
+      servicio_id,
+      allowed: SERVICIO_IDS_TODOS,
     });
   }
 
@@ -49,17 +38,18 @@ export async function executeCalcularPrecio(args: any): Promise<string> {
     });
   }
 
-  let precio_base = CATALOG[servicio_id];
+  let precio_base = servicio.precio;
   let ajuste_zona = 0;
   let precio_total = precio_base;
-  let requiere_adelanto = true;
+  let requiere_adelanto = servicio.requiere_adelanto;
   let monto_adelanto = 0;
 
   if (zona === "domicilio") {
-    // Tarifa flat de $40 total para domicilio — precio_base se iguala al total para consistencia
+    // Flat fee for domicilio — overrides service price
     precio_base = 40;
     precio_total = 40;
     ajuste_zona = 0;
+    requiere_adelanto = true;
   } else if (zona === "valle") {
     ajuste_zona = 5;
     precio_total += ajuste_zona;
@@ -69,9 +59,9 @@ export async function executeCalcularPrecio(args: any): Promise<string> {
     requiere_adelanto = false;
     monto_adelanto = 0;
   } else if (zona === "domicilio") {
-    monto_adelanto = 20; // 50% de 40
+    monto_adelanto = 20; // 50% of 40
   } else {
-    monto_adelanto = precio_total * 0.5;
+    monto_adelanto = requiere_adelanto ? precio_total * 0.5 : 0;
   }
 
   return JSON.stringify({
@@ -208,6 +198,20 @@ export async function executeAgendarCita(args: any, context: any): Promise<strin
 
   if (typeof precio_total !== "number" || typeof monto_adelanto !== "number") {
     return JSON.stringify({ error: "Faltan precio_total o monto_adelanto calculados. Primero llama calcular_precio y usa sus valores exactos." });
+  }
+
+  // Guard: reject non-schedulable services before any DB operation
+  const servicioGuard = getServicio(servicio_id);
+  if (!servicioGuard) {
+    return JSON.stringify({ error: "SERVICIO_DESCONOCIDO", servicio_id });
+  }
+  if (!servicioGuard.agendable) {
+    return JSON.stringify({
+      error: "NO_AGENDABLE",
+      servicio_id,
+      accion_requerida: "derivar_a_kelly",
+      motivo_sugerido: servicioGuard.derivacion_motivo,
+    });
   }
 
   try {
