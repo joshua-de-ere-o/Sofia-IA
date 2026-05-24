@@ -1,10 +1,249 @@
 /**
  * config.ts — Configuración del agente para Edge Functions (Deno).
- * 
- * NOTA: Este archivo replica SYSTEM_PROMPT y TOOLS de lib/agent.js
- * porque Supabase Edge Functions (Deno) no pueden importar módulos Node
- * fuera de su directorio. Si modificas lib/agent.js, sincroniza aquí.
+ *
+ * NOTA: SYSTEM_PROMPT y TOOLS viven aquí (fuente de verdad para Deno).
+ * lib/agent.js fue deprecado y eliminado — no sincronizar con él.
  */
+
+// ─── Catalog types ────────────────────────────────────────────────────────────
+
+export type ServicioCategoria =
+  | 'alimentario' | 'deportivo' | 'masaje'
+  | 'taller' | 'derivacion' | 'complementario';
+
+export type ServicioModalidad = 'presencial' | 'virtual';
+export type ServicioZona = 'sur' | 'norte' | 'valle' | 'domicilio' | 'virtual';
+
+export type Servicio = {
+  id: string;
+  label: string;
+  precio: number;
+  duracion_min: number | null;       // null for derivaciones / talleres without fixed slot
+  categoria: ServicioCategoria;
+  agendable: boolean;
+  modalidades: ServicioModalidad[];
+  zonas_permitidas: ServicioZona[];  // [] if N/A
+  requiere_adelanto: boolean;
+  permite_combo: boolean;
+  derivacion_motivo: string | null;  // required when agendable=false; null when agendable=true
+};
+
+// ─── Catalog ──────────────────────────────────────────────────────────────────
+// SYNC: este catálogo refleja lib/servicios.js (Node/CRM). Cambios → actualizar ambos.
+export const CATALOGO_SERVICIOS: Record<string, Servicio> = {
+  alimentario_quincenal: {
+    id: 'alimentario_quincenal',
+    label: 'Plan Alimentario Quincenal',
+    precio: 25,
+    duracion_min: 60,
+    categoria: 'alimentario',
+    agendable: true,
+    modalidades: ['presencial'],
+    zonas_permitidas: ['sur', 'norte'],
+    requiere_adelanto: true,
+    permite_combo: true,
+    derivacion_motivo: null,
+  },
+  alimentario_mensual: {
+    id: 'alimentario_mensual',
+    label: 'Plan Alimentario Mensual',
+    precio: 35, // TODO confirmar lunes (spec dice $40, código actual dice $35)
+    duracion_min: 60,
+    categoria: 'alimentario',
+    agendable: true,
+    modalidades: ['presencial'],
+    zonas_permitidas: ['sur', 'norte'],
+    requiere_adelanto: true,
+    permite_combo: true,
+    derivacion_motivo: null,
+  },
+  alimentario_exclusivo: {
+    id: 'alimentario_exclusivo',
+    label: 'Plan Alimentario Exclusivo',
+    precio: 100,
+    duracion_min: 60,
+    categoria: 'alimentario',
+    agendable: true,
+    modalidades: ['presencial', 'virtual'],
+    zonas_permitidas: ['sur', 'norte', 'domicilio', 'virtual'],
+    requiere_adelanto: true,
+    permite_combo: true,
+    derivacion_motivo: null,
+  },
+  trimestral: {
+    id: 'trimestral',
+    label: 'Plan Trimestral',
+    precio: 90,
+    duracion_min: 60,
+    categoria: 'alimentario',
+    agendable: true,
+    modalidades: ['presencial'],
+    zonas_permitidas: ['sur', 'norte'],
+    requiere_adelanto: true,
+    permite_combo: true,
+    derivacion_motivo: null,
+  },
+  virtual: {
+    id: 'virtual',
+    label: 'Consulta Virtual',
+    precio: 20,
+    duracion_min: 45,
+    categoria: 'alimentario',
+    agendable: true,
+    modalidades: ['virtual'],
+    zonas_permitidas: ['virtual'],
+    requiere_adelanto: true,
+    permite_combo: false,
+    derivacion_motivo: null,
+  },
+  inbody: {
+    id: 'inbody',
+    label: 'InBody',
+    precio: 20,
+    duracion_min: 20,
+    categoria: 'complementario',
+    agendable: true,
+    modalidades: ['presencial'],
+    zonas_permitidas: ['sur'],
+    requiere_adelanto: false,
+    permite_combo: true, // TODO Q6: ¿gratis con plan deportivo?
+    derivacion_motivo: null,
+  },
+  deportivo_quincenal: {
+    id: 'deportivo_quincenal',
+    label: 'Plan Deportivo Quincenal',
+    precio: 30,
+    duracion_min: 60,
+    categoria: 'deportivo',
+    agendable: true,
+    modalidades: ['presencial'], // TODO Q2: ¿virtual también?
+    zonas_permitidas: ['sur', 'norte'], // TODO Q7
+    requiere_adelanto: true, // TODO Q7
+    permite_combo: true,
+    derivacion_motivo: null,
+  },
+  deportivo_mensual: {
+    id: 'deportivo_mensual',
+    label: 'Plan Deportivo Mensual',
+    precio: 40,
+    duracion_min: 60,
+    categoria: 'deportivo',
+    agendable: true,
+    modalidades: ['presencial'], // TODO Q2
+    zonas_permitidas: ['sur', 'norte'], // TODO Q7
+    requiere_adelanto: true, // TODO Q7
+    permite_combo: true,
+    derivacion_motivo: null,
+  },
+  deportivo_exclusivo: {
+    id: 'deportivo_exclusivo',
+    label: 'Plan Deportivo Exclusivo',
+    precio: 100,
+    duracion_min: 60,
+    categoria: 'deportivo',
+    agendable: true,
+    modalidades: ['presencial', 'virtual'], // TODO Q2
+    zonas_permitidas: ['sur', 'norte', 'domicilio', 'virtual'], // TODO Q7
+    requiere_adelanto: true, // TODO Q7
+    permite_combo: true,
+    derivacion_motivo: null,
+  },
+  masaje: {
+    id: 'masaje',
+    label: 'Masaje Terapéutico',
+    precio: 15,
+    duracion_min: 30,
+    categoria: 'masaje',
+    agendable: true,
+    modalidades: ['presencial'],
+    zonas_permitidas: ['sur'], // TODO Q3: ¿descuento combo con plan mensual?
+    requiere_adelanto: false,
+    permite_combo: false,
+    derivacion_motivo: null,
+  },
+  taller_individual: {
+    id: 'taller_individual',
+    label: 'Taller Individual',
+    precio: 20,
+    duracion_min: 60,
+    categoria: 'taller',
+    agendable: true,
+    modalidades: ['presencial'], // TODO Q1: ¿también virtual?
+    zonas_permitidas: ['sur'], // TODO Q1: ¿también norte?
+    requiere_adelanto: true,
+    permite_combo: false,
+    derivacion_motivo: null,
+  },
+  taller_grupal: {
+    id: 'taller_grupal',
+    label: 'Taller Grupal',
+    precio: 80,
+    duracion_min: 90,
+    categoria: 'taller',
+    agendable: true,
+    modalidades: ['presencial'], // TODO Q1
+    zonas_permitidas: ['sur'], // TODO Q1
+    requiere_adelanto: true,
+    permite_combo: false,
+    derivacion_motivo: null,
+  },
+  taller_empresarial: {
+    id: 'taller_empresarial',
+    label: 'Taller Empresarial',
+    precio: 0,
+    duracion_min: null,
+    categoria: 'taller',
+    agendable: false,
+    modalidades: ['presencial'],
+    zonas_permitidas: [],
+    requiere_adelanto: false,
+    permite_combo: false,
+    derivacion_motivo: 'taller_empresarial',
+  },
+  reduccion_medidas: {
+    id: 'reduccion_medidas',
+    label: 'Reducción de Medidas',
+    precio: 0,
+    duracion_min: null,
+    categoria: 'derivacion',
+    agendable: false,
+    modalidades: ['presencial'],
+    zonas_permitidas: [],
+    requiere_adelanto: false,
+    permite_combo: false,
+    derivacion_motivo: 'reduccion_medidas', // TODO Q4: niveles $400/$1000/$1950 en 10-negocio.md
+  },
+};
+
+// ─── Derived enums (built once at module load) ────────────────────────────────
+export function getServicio(id: string): Servicio | null {
+  return CATALOGO_SERVICIOS[id] ?? null;
+}
+
+export const SERVICIO_IDS_AGENDABLES: string[] = Object.values(CATALOGO_SERVICIOS)
+  .filter((s) => s.agendable)
+  .map((s) => s.id);
+
+export const SERVICIO_IDS_TODOS: string[] = Object.keys(CATALOGO_SERVICIOS);
+
+// ─── Catalog invariant validation (runs at module load) ───────────────────────
+for (const s of Object.values(CATALOGO_SERVICIOS)) {
+  if (!s.agendable) {
+    if (s.derivacion_motivo === null) {
+      console.error(`[catalog] invariant violation: ${s.id} agendable=false but derivacion_motivo is null`);
+    }
+    if (s.duracion_min !== null) {
+      console.error(`[catalog] invariant violation: ${s.id} agendable=false but duracion_min is not null`);
+    }
+  } else {
+    if (typeof s.duracion_min !== 'number' || s.duracion_min <= 0) {
+      console.error(`[catalog] invariant violation: ${s.id} agendable=true but duracion_min is not > 0`);
+    }
+  }
+  if (!s.modalidades || s.modalidades.length === 0) {
+    console.error(`[catalog] invariant violation: ${s.id} has empty modalidades`);
+  }
+}
 
 export const SYSTEM_PROMPT = `Eres Sofía, la asistente virtual de la Dra. Kely León, nutricionista clínica y deportiva en Quito, Ecuador.
 
@@ -222,8 +461,8 @@ export const TOOLS = [
       properties: {
         servicio_id: {
           type: "string",
-          enum: ["inbody", "virtual", "quincenal", "mensual", "premium", "trimestral"],
-          description: "ID del plan de nutrición.",
+          enum: SERVICIO_IDS_TODOS,
+          description: "ID del servicio.",
         },
         zona: {
           type: "string",
@@ -245,7 +484,7 @@ export const TOOLS = [
         paciente_fecha_nacimiento: { type: "string", description: "Fecha de nacimiento del paciente en formato YYYY-MM-DD (convertí desde lo que el paciente te dio, ej: '15/03/1990' → '1990-03-15'). Requerido para la historia clínica de la Dra. Kely." },
         paciente_telefono: { type: "string", description: "Teléfono del paciente (ya lo tienes del chat)." },
         paciente_email: { type: "string", description: "Correo electrónico. Opcional." },
-        servicio_id: { type: "string", enum: ["inbody", "virtual", "quincenal", "mensual", "premium", "trimestral"], description: "ID del plan contratado." },
+        servicio_id: { type: "string", enum: SERVICIO_IDS_AGENDABLES, description: "ID del servicio agendable contratado." },
         fecha: { type: "string", description: "Fecha de la cita (YYYY-MM-DD)." },
         hora: { type: "string", description: "Hora de la cita (HH:MM)." },
         modalidad: { type: "string", enum: ["presencial", "virtual"], description: "Modalidad." },
