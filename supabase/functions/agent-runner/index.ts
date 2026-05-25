@@ -4,14 +4,16 @@ import { createClient } from "jsr:@supabase/supabase-js";
 // Imports locales (dentro del mismo directorio — Deno los resuelve correctamente)
 import { SYSTEM_PROMPT, TOOLS, MODEL_CONFIG } from "./config.ts";
 import { getModelAdapter } from "./model-adapter.ts";
-import { 
-  executeConsultarDisponibilidad, 
-  executeCalcularPrecio, 
-  executeAgendarCita, 
+import {
+  executeConsultarDisponibilidad,
+  executeCalcularPrecio,
+  executeAgendarCita,
   executeDerivarAKelly,
   executeCancelarCita,
-  executeReprogramarCita
+  executeReprogramarCita,
+  executeConfirmarMontoComprobante,
 } from "./tools.ts";
+import { handlePaymentFlow } from "./payment-flow.ts";
 
 const corsHeaders = {
   'Access-Control-Allow-Origin': '*',
@@ -26,6 +28,7 @@ const toolExecutors: Record<string, (args: any, ctx: any) => Promise<string>> = 
   derivar_a_kelly: executeDerivarAKelly,
   cancelar_cita: executeCancelarCita,
   reprogramar_cita: executeReprogramarCita,
+  confirmar_monto_comprobante: executeConfirmarMontoComprobante,
 };
 
 /**
@@ -134,12 +137,21 @@ Deno.serve(async (req: Request) => {
     const body = await req.json();
     const { senderNumber, text } = body;
     debugSenderNumber = senderNumber;
-    
+
     if (!senderNumber || !text) {
       return new Response("Bad Request: missing senderNumber or text", { status: 400 });
     }
 
-    console.log(`[Agent-Runner] Iniciando procesamiento para ${senderNumber}`);
+    // ── Image branch: route to payment flow before any LLM logic ──────────────
+    // If the webhook dispatched an image, context.imagen_recibida=true is set.
+    // We handle OCR + state transitions + Telegram notify here and return early.
+    // The text agent loop must NOT run for image requests (NFR-2: 5s YCloud window
+    // already satisfied by the webhook fire-and-forget, so no hard deadline here,
+    // but we still want to keep the image path clean and isolated).
+    if (body.context?.imagen_recibida === true) {
+      console.log(`[Agent-Runner] image entry senderNumber=${senderNumber} wamid=${body.context?.wamid ?? "?"}`);
+      return await handlePaymentFlow(body, supabase);
+    }
 
     // 1. Obtener/Crear conversación activa
     let { data: conv } = await supabase
