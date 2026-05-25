@@ -1,9 +1,19 @@
 import { NextResponse } from "next/server";
 import crypto from "crypto";
 import { createClient } from "@supabase/supabase-js";
-import { processPaymentImage } from "../../../lib/payments";
+import { uploadComprobante } from "../../../lib/payments";
 import { preFilter } from "../../../lib/pre-filter";
 import { sendWhatsAppMessage } from "../../../lib/ycloud";
+
+/**
+ * Mask a phone number for logging (inline — log.ts is Deno-only).
+ * Keeps first 5 chars + last 4, replaces middle with ***.
+ * Example: "+593987654321" → "+5939***4321"
+ */
+function maskPhone(phone) {
+  if (!phone || phone.length <= 9) return phone;
+  return `${phone.slice(0, 5)}***${phone.slice(-4)}`;
+}
 
 // YCloud envía eventos con shape:
 //   { type: "whatsapp.inbound_message.received", whatsappInboundMessage: { from, to, type, text:{body}, ... } }
@@ -151,11 +161,68 @@ export async function POST(req) {
     // Procesamiento específico por tipo de mensaje
     if (messageType === "image") {
       const imageUrl = message.image?.url;
-      if (imageUrl) {
-        console.log(`Procesando comprobante de pago de: ${senderNumber}`);
-        const res = await processPaymentImage(senderNumber, imageUrl);
-        if (!res.success) console.error("Error en proceso de pago:", res.error);
+      // Use wamid for deterministic filename + idempotency (design §1)
+      const wamid = message.wamid || message.id;
+
+      if (!imageUrl || !wamid) {
+        console.warn(`[Webhook] image sin imageUrl o wamid de ${maskPhone(senderNumber)}, ignorando`);
+        return NextResponse.json({ received: true });
       }
+
+      console.log(`[Webhook] image wamid=${wamid} phone=${maskPhone(senderNumber)}`);
+
+      // 1. Update last_message_at — BUG FIX: was missing for images, gap in 24h window tracking
+      await markLastMessage(supabase, senderNumber);
+
+      // 2. Upload to Storage + lookup patient + cita
+      const uploadRes = await uploadComprobante(senderNumber, wamid, imageUrl);
+      if (!uploadRes.success) {
+        console.error(`[Webhook] Fallo al subir comprobante phone=${maskPhone(senderNumber)}:`, uploadRes.error);
+        return NextResponse.json({ received: true });
+      }
+
+      // 3. Idempotency check — if we already have a pagos row with this referencia,
+      //    skip dispatch (same wamid = duplicate YCloud delivery, design §1).
+      const { data: existing } = await supabase
+        .from("pagos")
+        .select("id")
+        .eq("referencia", uploadRes.image_path)
+        .maybeSingle();
+
+      if (existing) {
+        console.log(`[Webhook] image duplicate wamid=${wamid} — ya procesado, skip`);
+        return NextResponse.json({ received: true, duplicate: true });
+      }
+
+      // 4. Fire-and-forget dispatch to agent-runner with imagen_recibida context.
+      //    agent-runner will: run OCR, validate amount, persist pagos row, transition
+      //    cita to confirmada_provisional, notify Kelly via Telegram (PR 3).
+      //
+      //    The fetch is intentionally NOT awaited — webhook must respond to YCloud
+      //    within ~500ms. agent-runner responds to patient directly via YCloud API.
+      const agentUrl = `${process.env.NEXT_PUBLIC_SUPABASE_URL}/functions/v1/agent-runner`;
+      fetch(agentUrl, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${process.env.SUPABASE_SERVICE_ROLE_KEY}`,
+        },
+        body: JSON.stringify({
+          senderNumber,
+          text: "[imagen]",
+          context: {
+            imagen_recibida: true,
+            image_url: uploadRes.publicUrl,
+            image_path: uploadRes.image_path,
+            cita_id: uploadRes.citaId,
+            wamid,
+          },
+        }),
+      }).catch((e) =>
+        console.error(`[Webhook] agent-runner fire-and-forget failed phone=${maskPhone(senderNumber)}:`, e.message)
+      );
+
+      console.log(`[Webhook] image dispatched to agent-runner phone=${maskPhone(senderNumber)} wamid=${wamid}`);
       return NextResponse.json({ received: true });
     }
 
