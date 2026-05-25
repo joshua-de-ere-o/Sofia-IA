@@ -18,6 +18,7 @@
 import { extractAmountFromReceipt } from "./ocr.ts";
 import { normalizeAmount, amountMatches } from "./amount.ts";
 import { logPaymentEvent } from "./log.ts";
+import { notifyPaymentPendingApproval } from "./telegram-notify.ts";
 
 // ─── Copy (copy-final, LOCKED) ────────────────────────────────────────────────
 
@@ -36,9 +37,6 @@ const M6 =
 const M7 =
   "Ya recibí tu comprobante anterior, lo estoy revisando con la doctora.";
 
-const WAME_PRESET_TEXT =
-  "Hola {{nombre}}, te escribo personalmente. Vi que agendaste una cita conmigo pero no llegué a recibir el adelanto. ¿Pasó algo con el pago? Si quieres cuéntame y vemos cómo seguimos.";
-
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
 /**
@@ -47,18 +45,6 @@ const WAME_PRESET_TEXT =
  */
 function fmt(n: number): string {
   return n.toFixed(2);
-}
-
-/**
- * Format the 24h WA window remaining from last_message_at.
- * Returns "Xh Ym" or "vencida" if expired.
- */
-function formatWindowRemaining(lastMessageAt: string): string {
-  const ms = new Date(lastMessageAt).getTime() + 24 * 3_600_000 - Date.now();
-  if (ms <= 0) return "vencida";
-  const h = Math.floor(ms / 3_600_000);
-  const m = Math.floor((ms % 3_600_000) / 60_000);
-  return `${h}h ${m}m`;
 }
 
 /**
@@ -79,107 +65,6 @@ async function sendWA(to: string, text: string): Promise<void> {
     });
   } catch (e) {
     console.error("[Payment-Flow] YCloud send error:", e);
-  }
-}
-
-/**
- * Notify Kelly via Telegram about a pending payment approval.
- * Uses sendPhoto with the receipt image. Falls back to sendMessage if photo fails.
- *
- * Design §5: agent-runner calls Telegram Bot API directly (no Next.js round-trip).
- * short_id = pending_kelly_actions.id (UUID, 36 chars; prefix + UUID = 52 bytes, under 64-byte limit).
- */
-async function notifyKellyPaymentApproval(params: {
-  pendingId: string;
-  receiptUrl: string;
-  nombre: string;
-  telefono: string;
-  fechaHora: string;
-  servicio: string;
-  objetivo: string | null;
-  montoOcr: number;
-  montoEsperado: number;
-  lastMessageAt: string;
-}): Promise<void> {
-  const botToken = Deno.env.get("TELEGRAM_BOT_TOKEN");
-  const chatId = Deno.env.get("TELEGRAM_CHAT_ID");
-  if (!botToken || !chatId) {
-    console.error("[Payment-Flow] Missing Telegram credentials");
-    return;
-  }
-
-  const countdown = formatWindowRemaining(params.lastMessageAt);
-  const matchEmoji = amountMatches(params.montoOcr, params.montoEsperado) ? "✅" : "⚠️";
-  const objetivoLine = params.objetivo ? `\nObjetivo: ${params.objetivo}` : "";
-
-  const caption = [
-    `💳 *Comprobante pendiente de revisión*`,
-    `Paciente: ${params.nombre}`,
-    `Cita: ${params.fechaHora} — ${params.servicio}`,
-    objetivoLine.trim(),
-    `Monto recibido: $${fmt(params.montoOcr)} (señal esperada: $${fmt(params.montoEsperado)}) ${matchEmoji}`,
-    `⏱ Ventana WA: ~${countdown} restantes`,
-  ].filter(Boolean).join("\n");
-
-  const phoneE164 = params.telefono.replace(/^\+/, "");
-  const waMeText = encodeURIComponent(
-    WAME_PRESET_TEXT.replace("{{nombre}}", params.nombre),
-  );
-
-  const inlineKeyboard = {
-    inline_keyboard: [[
-      { text: "✅ Confirmar", callback_data: `payment_confirm_${params.pendingId}` },
-      { text: "❌ Rechazar", callback_data: `payment_reject_${params.pendingId}` },
-      { text: `💬 Escribir a ${params.nombre}`, url: `https://wa.me/${phoneE164}?text=${waMeText}` },
-    ]],
-  };
-
-  const tgBase = `https://api.telegram.org/bot${botToken}`;
-
-  // Try sendPhoto first
-  try {
-    const photoRes = await fetch(`${tgBase}/sendPhoto`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        chat_id: chatId,
-        photo: params.receiptUrl,
-        caption,
-        parse_mode: "Markdown",
-        reply_markup: inlineKeyboard,
-      }),
-    });
-    const photoData = await photoRes.json() as { ok: boolean };
-    if (photoData.ok) {
-      logPaymentEvent("tg_notify_ok", { pendingId: params.pendingId });
-      return;
-    }
-    // sendPhoto failed — fall through to sendMessage
-    console.warn("[Payment-Flow] sendPhoto failed, falling back to sendMessage:", JSON.stringify(photoData));
-  } catch (e) {
-    console.warn("[Payment-Flow] sendPhoto error, falling back to sendMessage:", e);
-  }
-
-  // Fallback: sendMessage with image URL as a separate line
-  try {
-    const msgRes = await fetch(`${tgBase}/sendMessage`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        chat_id: chatId,
-        text: `${caption}\n\nComprobante: ${params.receiptUrl}`,
-        parse_mode: "Markdown",
-        reply_markup: inlineKeyboard,
-      }),
-    });
-    const msgData = await msgRes.json() as { ok: boolean };
-    if (msgData.ok) {
-      logPaymentEvent("tg_notify_fallback_ok", { pendingId: params.pendingId });
-    } else {
-      logPaymentEvent("tg_notify_failed", { pendingId: params.pendingId, reason: JSON.stringify(msgData) });
-    }
-  } catch (e) {
-    logPaymentEvent("tg_notify_failed", { pendingId: params.pendingId, reason: String(e) });
   }
 }
 
@@ -330,7 +215,7 @@ export async function handlePaymentFlow(
         hour: "2-digit", minute: "2-digit",
         timeZone: "America/Guayaquil",
       });
-      notifyKellyPaymentApproval({
+      notifyPaymentPendingApproval({
         pendingId: pendingData.id,
         receiptUrl: image_url,
         nombre: paciente.nombre ?? senderNumber,
