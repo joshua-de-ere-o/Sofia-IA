@@ -1,5 +1,7 @@
 import { createClient } from "jsr:@supabase/supabase-js";
 import { getServicio, SERVICIO_IDS_TODOS, DERIVACION_TEMPLATES } from "./config.ts";
+import { normalizeAmount, amountMatches } from "./amount.ts";
+import { logPaymentEvent } from "./log.ts";
 
 /**
  * supabase/functions/agent-runner/tools.ts
@@ -98,7 +100,7 @@ export async function executeConsultarDisponibilidad(args: any): Promise<string>
       .select('fecha, hora, estado')
       .gte('fecha', fecha_inicio)
       .lte('fecha', fecha_fin)
-      .not('estado', 'in', '(cancelada,no_show)');
+      .not('estado', 'in', '(cancelada,no_show,rechazada)');
       
     if (errorCitas) throw errorCitas;
 
@@ -228,7 +230,7 @@ export async function executeAgendarCita(args: any, context: any): Promise<strin
       .select('id')
       .eq('fecha', fecha)
       .eq('hora', horaNorm)
-      .not('estado', 'in', '(cancelada,no_show)');
+      .not('estado', 'in', '(cancelada,no_show,rechazada)');
 
     if (slotCheck && slotCheck.length > 0) {
       return JSON.stringify({ 
@@ -521,7 +523,7 @@ export async function executeReprogramarCita(args: any, context: any): Promise<s
       .select('id')
       .eq('fecha', nueva_fecha)
       .eq('hora', nuevaHoraNorm)
-      .not('estado', 'in', '(cancelada,no_show)');
+      .not('estado', 'in', '(cancelada,no_show,rechazada)');
 
     if (slotCheck && slotCheck.length > 0) {
       return JSON.stringify({ error: "El nuevo slot ya está ocupado. Intenta con otra fecha/hora." });
@@ -535,5 +537,128 @@ export async function executeReprogramarCita(args: any, context: any): Promise<s
     return JSON.stringify({ success: true, mensaje_interno: "Cita reprogramada exitosamente. Confírmaselo al paciente." });
   } catch (err: any) {
     return JSON.stringify({ error: `Fallo al reprogramar: ${err.message}` });
+  }
+}
+
+/**
+ * executeConfirmarMontoComprobante — OCR fallback text confirmation (FR-11).
+ *
+ * Called when the LLM detects the patient replied with a numeric amount after
+ * Sofia asked "¿puedes confirmarme cuánto pagaste?" (OCR failure turn).
+ *
+ * Looks for the most recent pagos row with verificado=false AND monto IS NULL
+ * for this patient's cita (via pending_payment_confirmation_cita_id on
+ * conversaciones). If the normalized amount matches monto_adelanto, runs the
+ * same side-effects as the OCR-ok-match path in payment-flow.ts.
+ *
+ * Returns JSON with status + copy key for Sofia to use as her reply.
+ */
+export async function executeConfirmarMontoComprobante(
+  args: { monto: number },
+  ctx: { senderNumber: string; conversacion_id: string; paciente_id: string | null },
+): Promise<string> {
+  const supabaseUrl = Deno.env.get("SUPABASE_URL") ?? "";
+  const supabaseKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") ?? "";
+  const supabase = createClient(supabaseUrl, supabaseKey);
+
+  try {
+    // 1. Get conversacion to find pending cita
+    const { data: conv } = await supabase
+      .from("conversaciones")
+      .select("id, pending_payment_confirmation_cita_id, last_message_at")
+      .eq("id", ctx.conversacion_id)
+      .single();
+
+    const citaId = conv?.pending_payment_confirmation_cita_id;
+    if (!citaId) {
+      return JSON.stringify({ error: "no_pending_cita", mensaje_sofia: "No encontré una cita pendiente de confirmación de pago. ¿Puedes indicarme cuál es tu cita?" });
+    }
+
+    // 2. Load cita
+    const { data: cita } = await supabase
+      .from("citas")
+      .select("id, monto_adelanto, estado, paciente_id, servicio_id, fecha_hora")
+      .eq("id", citaId)
+      .single();
+
+    if (!cita) {
+      return JSON.stringify({ error: "cita_not_found" });
+    }
+
+    if (cita.estado !== "pendiente_pago") {
+      return JSON.stringify({
+        status: "already_processed",
+        mensaje_sofia: "Tu cita ya está en proceso de confirmación.",
+      });
+    }
+
+    // 3. Normalize and check amount
+    const montoNorm = normalizeAmount(args.monto);
+    if (montoNorm === null) {
+      return JSON.stringify({
+        status: "invalid_amount",
+        mensaje_sofia: "No pude interpretar el monto que me diste. ¿Puedes indicarme solo el número, por ejemplo: 17.50?",
+      });
+    }
+
+    if (!amountMatches(montoNorm, cita.monto_adelanto)) {
+      return JSON.stringify({
+        status: "underpayment",
+        monto_recibido: montoNorm,
+        monto_esperado: cita.monto_adelanto,
+        mensaje_sofia: `El monto de la señal es $${cita.monto_adelanto.toFixed(2)}, pero me indicaste $${montoNorm.toFixed(2)}. ¿Puedes verificarlo?`,
+      });
+    }
+
+    // 4. Match! Apply same side-effects as OCR-ok-match path
+    const expiraAt = new Date(Date.now() + 24 * 3_600_000).toISOString();
+
+    // Insert pago (referencia = "texto_paciente" to distinguish from OCR path)
+    const { data: pagoData } = await supabase
+      .from("pagos")
+      .insert({
+        cita_id: cita.id,
+        monto: montoNorm,
+        referencia: `texto_${ctx.conversacion_id}`,
+        verificado: false,
+        url_comprobante: null,
+      })
+      .select()
+      .single();
+
+    // Transition cita
+    await supabase
+      .from("citas")
+      .update({ estado: "confirmada_provisional" })
+      .eq("id", cita.id);
+
+    // Insert pending_kelly_actions
+    if (pagoData) {
+      await supabase
+        .from("pending_kelly_actions")
+        .insert({
+          action_type: "aprobar_pago",
+          expira_at: expiraAt,
+          args: { cita_id: cita.id, pago_id: pagoData.id, source: "ocr_fallback_text" },
+        });
+    }
+
+    // Clear the pending flag on conversacion
+    await supabase
+      .from("conversaciones")
+      .update({ pending_payment_confirmation_cita_id: null })
+      .eq("id", ctx.conversacion_id);
+
+    logPaymentEvent("text_fallback_confirmed", { citaId: cita.id, monto: montoNorm });
+
+    // Sofia uses M4 copy (copy-final: "Gracias por confirmarme el monto...")
+    return JSON.stringify({
+      status: "confirmed_provisional",
+      monto: montoNorm,
+      mensaje_sofia: "Gracias por confirmarme el monto. ¡Tu cita queda agendada! La Dra. Kelly valida el pago cuando tenga un momento. ¡Te esperamos!",
+    });
+  } catch (err: any) {
+    logPaymentEvent("text_fallback_error", { reason: err?.message });
+    return JSON.stringify({ error: `Error al confirmar monto: ${err?.message}` });
   }
 }
