@@ -86,7 +86,9 @@ function messagesToGemini(messages: any[]) {
       if (msg.content) parts.push({ text: msg.content });
       if (msg.tool_calls) {
         for (const tc of msg.tool_calls) {
-          parts.push({ functionCall: { name: tc.name, args: tc.input || tc.arguments || {} } });
+          const part: any = { functionCall: { name: tc.name, args: tc.input || tc.arguments || {} } };
+          if (tc.thoughtSignature) part.thoughtSignature = tc.thoughtSignature;
+          parts.push(part);
         }
       }
       out.push({ role: "model", parts });
@@ -117,7 +119,11 @@ function normalizeGemini(data: any) {
   const parts = data.candidates?.[0]?.content?.parts || [];
   const text = parts.filter((p: any) => p.text).map((p: any) => p.text).join("") || null;
   const toolCalls = parts.filter((p: any) => p.functionCall).map((p: any, i: number) => ({
-    id: `gemini_${Date.now()}_${i}`, name: p.functionCall.name, input: p.functionCall.args || {}, arguments: p.functionCall.args || {},
+    id: `gemini_${Date.now()}_${i}`,
+    name: p.functionCall.name,
+    input: p.functionCall.args || {},
+    arguments: p.functionCall.args || {},
+    thoughtSignature: p.thoughtSignature,
   }));
   return { text, toolCalls, usage: { input: data.usageMetadata?.promptTokenCount || 0, output: data.usageMetadata?.candidatesTokenCount || 0 } };
 }

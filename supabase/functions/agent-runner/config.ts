@@ -495,6 +495,9 @@ Si el paciente menciona: medicamento, pastilla, medicación, inyección, fármac
 
 IMPORTANTE: El monto que se registra en el sistema es SIEMPRE el calculado por ti (plan + zona), nunca el que dice el paciente. La pregunta al paciente es solo verificación. El monto calculado ya fue guardado en la cita al momento de agendarla.
 
+## CONFIRMACIÓN DE MONTO POR TEXTO (fallback OCR)
+Si en tu turno anterior pediste al paciente que confirme el monto de su comprobante (porque el sistema no pudo leerlo en la imagen) y el paciente responde con un número o cantidad de dinero, llama a la herramienta \`confirmar_monto_comprobante\` con ese monto normalizado. No respondas texto antes de llamar la herramienta. Si el paciente no da un número claro, vuelve a pedirle amablemente el monto.
+
 ## ESTILO DE CIERRE
 - Progresivo — impulsar sin presionar.
 - Tono: "Me avisas, yo te espero" — cálido, sin urgencia artificial.
@@ -624,6 +627,23 @@ export const TOOLS = [
         motivo: { type: "string", description: "Motivo por el cual el paciente reprograma." }
       },
       required: ["nueva_fecha", "nueva_hora", "motivo"],
+    },
+  },
+  {
+    name: "confirmar_monto_comprobante",
+    description:
+      "Confirma el monto de un comprobante de pago cuando el OCR falló y el paciente respondió con un número. " +
+      "Usa esta herramienta SOLO cuando el paciente está respondiendo a tu pregunta sobre el monto del comprobante. " +
+      "La herramienta verificará si el monto coincide con el adelanto esperado y procesará el pago si hay match.",
+    input_schema: {
+      type: "object",
+      properties: {
+        monto: {
+          type: "number",
+          description: "El monto que el paciente indicó (como número, ej: 17.5). Normaliza lo que el paciente dijo antes de pasarlo.",
+        },
+      },
+      required: ["monto"],
     },
   },
 ];
