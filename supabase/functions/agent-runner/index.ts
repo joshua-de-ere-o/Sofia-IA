@@ -121,13 +121,19 @@ Deno.serve(async (req: Request) => {
     return new Response('ok', { headers: corsHeaders });
   }
 
+  let debugSenderNumber: string | null = null;
+  let debugSupabase: any = null;
+  let debugIteration = 0;
+
   try {
     const supabaseUrl = Deno.env.get("SUPABASE_URL") ?? "";
     const supabaseKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") ?? "";
     const supabase = createClient(supabaseUrl, supabaseKey);
+    debugSupabase = supabase;
 
     const body = await req.json();
     const { senderNumber, text } = body;
+    debugSenderNumber = senderNumber;
     
     if (!senderNumber || !text) {
       return new Response("Bad Request: missing senderNumber or text", { status: 400 });
@@ -216,6 +222,7 @@ Deno.serve(async (req: Request) => {
 
     while (!agentFinished && iteration < MAX_ITERATIONS) {
       iteration++;
+      debugIteration = iteration;
       console.log(`[Agent-Runner] Iteración ${iteration}...`);
 
       const isConfirmation = history.length > 0 && history[history.length - 1].role === 'tool';
@@ -328,7 +335,16 @@ No inventes datos. Si no estás seguro de un campo, usá null.`;
     return new Response(JSON.stringify({ status: "success", historyLength: history.length }), { headers: corsHeaders, status: 200 });
 
   } catch (err: any) {
-    console.error("Error crítico en Agent-Runner:", err);
+    const errorDetails = `[${new Date().toISOString()}] iter=${debugIteration} ${err?.name}: ${err?.message}\n\nSTACK:\n${err?.stack}\n\nCAUSE: ${JSON.stringify(err?.cause)}`;
+    console.error("[Agent-Runner] Error crítico:", errorDetails);
+    try {
+      if (debugSupabase && debugSenderNumber) {
+        await debugSupabase.from("conversaciones")
+          .update({ historial_resumido: `LAST_ERROR: ${errorDetails}` })
+          .eq("telefono_contacto", debugSenderNumber)
+          .eq("estado", "activa");
+      }
+    } catch (_) { /* no-op */ }
     return new Response(JSON.stringify({ error: err.message }), { status: 500, headers: corsHeaders });
   }
 });
