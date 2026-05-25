@@ -9,6 +9,7 @@
  */
 
 import { assertEquals, assertExists } from "https://deno.land/std@0.224.0/assert/mod.ts";
+import type { SupabaseDb } from "../payment-flow.ts";
 
 // ─── Mock helpers ─────────────────────────────────────────────────────────────
 
@@ -145,7 +146,7 @@ Deno.test("handlePaymentFlow — Zona Sur (monto_adelanto=0): skips OCR, returns
 
   const body = {
     senderNumber: "+593999000001",
-    context: { imagen_recibida: true, image_url: "https://example.com/img.jpg", cita_id: "cita-1", wamid: "wamid-1" },
+    context: { imagen_recibida: true as const, image_url: "https://example.com/img.jpg", cita_id: "cita-1", wamid: "wamid-1" },
   };
 
   let waSent: string | null = null;
@@ -154,13 +155,13 @@ Deno.test("handlePaymentFlow — Zona Sur (monto_adelanto=0): skips OCR, returns
       // Capture WA message but don't simulate OCR (should not be called)
       const url = typeof _url === "string" ? _url : _url.toString();
       if (url.includes("ycloud")) {
-        const reqBody = JSON.parse((_init?.body ?? "{}") as string);
+        const reqBody = JSON.parse((_init as { body?: string })?.body ?? "{}");
         waSent = reqBody?.text?.body ?? null;
       }
       return Promise.resolve(new Response(JSON.stringify({ ok: true }), { status: 200 }));
     },
     async () => {
-      const result = await handlePaymentFlow(body, supabase);
+      const result = await handlePaymentFlow(body, supabase as unknown as SupabaseDb);
       assertEquals(result.status, 200);
       assertEquals(state.pagosInserted.length, 0);
       assertEquals(state.citasUpdated.length, 0);
@@ -284,7 +285,7 @@ Deno.test("handlePaymentFlow — OCR ok, monto matches: inserts pagos + transiti
   const body = {
     senderNumber: "+593999000002",
     context: {
-      imagen_recibida: true,
+      imagen_recibida: true as const,
       image_url: "https://example.com/receipt.jpg",
       cita_id: "cita-2",
       wamid: "wamid-2",
@@ -306,7 +307,7 @@ Deno.test("handlePaymentFlow — OCR ok, monto matches: inserts pagos + transiti
         );
       }
       if (u.includes("ycloud")) {
-        const reqBody = JSON.parse((init?.body ?? "{}") as string);
+        const reqBody = JSON.parse((init as { body?: string })?.body ?? "{}");
         waSent = reqBody?.text?.body ?? null;
       }
       if (u.includes("api.telegram.org")) {
@@ -315,7 +316,7 @@ Deno.test("handlePaymentFlow — OCR ok, monto matches: inserts pagos + transiti
       return Promise.resolve(new Response(JSON.stringify({ ok: true, result: { message_id: 1 } }), { status: 200 }));
     },
     async () => {
-      const result = await handlePaymentFlow(body, supabase);
+      const result = await handlePaymentFlow(body, supabase as unknown as SupabaseDb);
       assertEquals(result.status, 200);
       assertEquals(state.pagosInserted.length, 1);
       assertEquals(state.pagosInserted[0]!.monto, 17.5);
@@ -373,7 +374,7 @@ Deno.test("handlePaymentFlow — OCR ok, underpayment: no DB writes, sends M2", 
 
   const body = {
     senderNumber: "+593999000003",
-    context: { imagen_recibida: true, image_url: "https://example.com/r.jpg", cita_id: "cita-3", wamid: "wamid-3" },
+    context: { imagen_recibida: true as const, image_url: "https://example.com/r.jpg", cita_id: "cita-3", wamid: "wamid-3" },
   };
 
   let waSent: string | null = null;
@@ -390,13 +391,13 @@ Deno.test("handlePaymentFlow — OCR ok, underpayment: no DB writes, sends M2", 
         );
       }
       if (u.includes("ycloud")) {
-        const reqBody = JSON.parse((init?.body ?? "{}") as string);
+        const reqBody = JSON.parse((init as { body?: string })?.body ?? "{}");
         waSent = reqBody?.text?.body ?? null;
       }
       return Promise.resolve(new Response(JSON.stringify({ ok: true }), { status: 200 }));
     },
     async () => {
-      const result = await handlePaymentFlow(body, supabase);
+      const result = await handlePaymentFlow(body, supabase as unknown as SupabaseDb);
       assertEquals(result.status, 200);
       assertEquals(state.pagosInserted.length, 0);
       assertEquals(state.citasUpdated.length, 0);
@@ -447,7 +448,7 @@ Deno.test("handlePaymentFlow — OCR returns null: no DB writes, sends M3", asyn
 
   const body = {
     senderNumber: "+593999000004",
-    context: { imagen_recibida: true, image_url: "https://example.com/null.jpg", cita_id: "cita-4", wamid: "wamid-4" },
+    context: { imagen_recibida: true as const, image_url: "https://example.com/null.jpg", cita_id: "cita-4", wamid: "wamid-4" },
   };
 
   let waSent: string | null = null;
@@ -464,13 +465,13 @@ Deno.test("handlePaymentFlow — OCR returns null: no DB writes, sends M3", asyn
         );
       }
       if (u.includes("ycloud")) {
-        const reqBody = JSON.parse((init?.body ?? "{}") as string);
+        const reqBody = JSON.parse((init as { body?: string })?.body ?? "{}");
         waSent = reqBody?.text?.body ?? null;
       }
       return Promise.resolve(new Response(JSON.stringify({ ok: true }), { status: 200 }));
     },
     async () => {
-      const result = await handlePaymentFlow(body, supabase);
+      const result = await handlePaymentFlow(body, supabase as unknown as SupabaseDb);
       assertEquals(result.status, 200);
       assertEquals(state.pagosInserted.length, 0);
       assertEquals(state.citasUpdated.length, 0);
@@ -507,7 +508,7 @@ Deno.test("handlePaymentFlow — already confirmada_provisional: skips OCR, send
 
   const body = {
     senderNumber: "+593999000005",
-    context: { imagen_recibida: true, image_url: "https://example.com/dup.jpg", cita_id: "cita-5", wamid: "wamid-5" },
+    context: { imagen_recibida: true as const, image_url: "https://example.com/dup.jpg", cita_id: "cita-5", wamid: "wamid-5" },
   };
 
   let waSent: string | null = null;
@@ -518,13 +519,13 @@ Deno.test("handlePaymentFlow — already confirmada_provisional: skips OCR, send
       const u = typeof url === "string" ? url : url.toString();
       if (u.includes("generativelanguage")) geminiCalled = true;
       if (u.includes("ycloud")) {
-        const reqBody = JSON.parse((init?.body ?? "{}") as string);
+        const reqBody = JSON.parse((init as { body?: string })?.body ?? "{}");
         waSent = reqBody?.text?.body ?? null;
       }
       return Promise.resolve(new Response(JSON.stringify({ ok: true }), { status: 200 }));
     },
     async () => {
-      const result = await handlePaymentFlow(body, supabase);
+      const result = await handlePaymentFlow(body, supabase as unknown as SupabaseDb);
       assertEquals(result.status, 200);
       assertEquals(geminiCalled, false); // OCR must NOT be called
       assertEquals(state.pagosInserted.length, 0);

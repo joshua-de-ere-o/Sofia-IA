@@ -153,7 +153,7 @@ Deno.test("notifyPaymentPendingApproval — calls sendPhoto with correct params"
   globalThis.fetch = (url, init) => {
     const u = typeof url === "string" ? url : url.toString();
     calledEndpoint = u;
-    capturedBody = JSON.parse((init?.body ?? "{}") as string);
+    capturedBody = JSON.parse((init as { body?: string })?.body ?? "{}") as Record<string, unknown>;
     return Promise.resolve(
       new Response(JSON.stringify({ ok: true, result: { message_id: 42 } }), { status: 200 }),
     );
@@ -174,9 +174,9 @@ Deno.test("notifyPaymentPendingApproval — calls sendPhoto with correct params"
     });
 
     assertStringIncludes(calledEndpoint, "sendPhoto");
-    assertEquals(capturedBody?.chat_id, "12345");
-    assertEquals(capturedBody?.photo, "https://example.com/receipt.jpg");
-    assertStringIncludes(capturedBody?.caption as string, "Ana Torres");
+    assertEquals(capturedBody!.chat_id, "12345");
+    assertEquals(capturedBody!.photo, "https://example.com/receipt.jpg");
+    assertStringIncludes(capturedBody!.caption as string, "Ana Torres");
   } finally {
     globalThis.fetch = original;
   }

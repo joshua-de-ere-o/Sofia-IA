@@ -90,9 +90,9 @@ export interface PaymentFlowBody {
  */
 export async function handlePaymentFlow(
   body: PaymentFlowBody,
-  supabase: unknown,
+  supabase: SupabaseDb,
 ): Promise<Response> {
-  const db = supabase as Record<string, (...args: unknown[]) => unknown>;
+  const db = supabase;
   const { senderNumber, context } = body;
   const { image_url, cita_id, wamid } = context;
 
@@ -104,10 +104,10 @@ export async function handlePaymentFlow(
   }
 
   // 1. Fetch cita
-  const { data: cita, error: citaErr } = await (db.from("citas") as ReturnType<typeof supabaseFrom>)
+  const { data: cita, error: citaErr } = (await db.from("citas")
     .select("id, monto_adelanto, estado, servicio_id, fecha_hora, paciente_id")
     .eq("id", cita_id)
-    .single() as Promise<{ data: CitaRow | null; error: unknown }>;
+    .single()) as { data: CitaRow | null; error: unknown };
 
   if (citaErr || !cita) {
     console.error("[Payment-Flow] Could not load cita:", citaErr);
@@ -129,21 +129,25 @@ export async function handlePaymentFlow(
   }
 
   // 4. Fetch paciente + servicio + conversacion for Telegram message
-  const [pacResult, svcResult, convResult] = await Promise.all([
-    (db.from("pacientes") as ReturnType<typeof supabaseFrom>)
+  const [pacResult, svcResult, convResult] = (await Promise.all([
+    db.from("pacientes")
       .select("nombre, telefono, objetivo")
       .eq("id", cita.paciente_id)
-      .single() as Promise<{ data: PacienteRow | null; error: unknown }>,
-    (db.from("servicios") as ReturnType<typeof supabaseFrom>)
+      .single(),
+    db.from("servicios")
       .select("nombre")
       .eq("id", cita.servicio_id)
-      .single() as Promise<{ data: { nombre: string } | null; error: unknown }>,
-    (db.from("conversaciones") as ReturnType<typeof supabaseFrom>)
+      .single(),
+    db.from("conversaciones")
       .select("id, last_message_at")
       .eq("telefono_contacto", senderNumber)
       .eq("estado", "activa")
-      .single() as Promise<{ data: ConvRow | null; error: unknown }>,
-  ]);
+      .single(),
+  ])) as [
+    { data: PacienteRow | null; error: unknown },
+    { data: { nombre: string } | null; error: unknown },
+    { data: ConvRow | null; error: unknown },
+  ];
 
   const paciente = pacResult.data;
   const servicio = svcResult.data;
@@ -165,7 +169,7 @@ export async function handlePaymentFlow(
   // Branch A: OCR ok + amount matches
   if (montoNorm !== null && amountMatches(montoNorm, cita.monto_adelanto)) {
     // INSERT into pagos
-    const { data: pagoData, error: pagoErr } = await (db.from("pagos") as ReturnType<typeof supabaseFrom>)
+    const { data: pagoData, error: pagoErr } = (await db.from("pagos")
       .insert({
         cita_id: cita.id,
         monto: montoNorm,
@@ -174,7 +178,7 @@ export async function handlePaymentFlow(
         url_comprobante: image_url,
       })
       .select()
-      .single() as Promise<{ data: { id: string } | null; error: unknown }>;
+      .single()) as { data: { id: string } | null; error: unknown };
 
     if (pagoErr || !pagoData) {
       console.error("[Payment-Flow] Error inserting pago:", pagoErr);
@@ -183,20 +187,20 @@ export async function handlePaymentFlow(
     }
 
     // UPDATE cita estado
-    await (db.from("citas") as ReturnType<typeof supabaseFrom>)
+    await db.from("citas")
       .update({ estado: "confirmada_provisional" })
       .eq("id", cita.id);
 
     // INSERT pending_kelly_actions (TTL 24h — set explicitly per design §4)
     const expiraAt = new Date(Date.now() + 24 * 3_600_000).toISOString();
-    const { data: pendingData, error: pendingErr } = await (db.from("pending_kelly_actions") as ReturnType<typeof supabaseFrom>)
+    const { data: pendingData, error: pendingErr } = (await db.from("pending_kelly_actions")
       .insert({
         action_type: "aprobar_pago",
         expira_at: expiraAt,
         args: { cita_id: cita.id, pago_id: pagoData.id },
       })
       .select()
-      .single() as Promise<{ data: { id: string } | null; error: unknown }>;
+      .single()) as { data: { id: string } | null; error: unknown };
 
     if (pendingErr || !pendingData) {
       console.error("[Payment-Flow] Error inserting pending_kelly_actions:", pendingErr);
@@ -231,7 +235,7 @@ export async function handlePaymentFlow(
 
     // Update conversation last activity
     if (conv) {
-      await (db.from("conversaciones") as ReturnType<typeof supabaseFrom>)
+      await db.from("conversaciones")
         .update({ ultima_actividad: new Date().toISOString() })
         .eq("id", conv.id)
         .eq("estado", "activa");
@@ -253,7 +257,7 @@ export async function handlePaymentFlow(
 
   // Set pending_payment_confirmation_cita_id on conversacion for text fallback (FR-11)
   if (conv) {
-    await (db.from("conversaciones") as ReturnType<typeof supabaseFrom>)
+    await db.from("conversaciones")
       .update({ pending_payment_confirmation_cita_id: cita.id })
       .eq("id", conv.id)
       .eq("estado", "activa");
@@ -264,6 +268,29 @@ export async function handlePaymentFlow(
 }
 
 // ─── Internal type helpers (keep private to this module) ──────────────────────
+
+/**
+ * Minimal interface describing the Supabase JS client API surface used by this
+ * module. Avoids importing jsr:@supabase/supabase-js directly (which pulls in
+ * npm:@supabase/realtime-js and breaks local deno check when node_modules is
+ * managed by npm for the Next.js app rather than Deno).
+ *
+ * The real createClient() return value satisfies this interface at runtime.
+ * Test mocks that do not fully implement QueryBuilder should cast via
+ * `mockObj as unknown as SupabaseDb` at the call site.
+ */
+export interface SupabaseDb {
+  from(table: string): QueryBuilder;
+}
+
+interface QueryBuilder {
+  select(cols?: string): QueryBuilder;
+  eq(col: string, val: unknown): QueryBuilder;
+  single(): Promise<{ data: unknown; error: unknown }>;
+  maybeSingle(): Promise<{ data: unknown; error: unknown }>;
+  insert(rows: Record<string, unknown>): QueryBuilder;
+  update(vals: Record<string, unknown>): QueryBuilder;
+}
 
 interface CitaRow {
   id: string;
@@ -283,19 +310,4 @@ interface PacienteRow {
 interface ConvRow {
   id: string;
   last_message_at: string;
-}
-
-// Type alias for the chainable Supabase query builder (simplified)
-type SupabaseQuery = {
-  select: (cols?: string) => SupabaseQuery;
-  eq: (col: string, val: unknown) => SupabaseQuery;
-  single: () => Promise<{ data: unknown; error: unknown }>;
-  maybeSingle: () => Promise<{ data: unknown; error: unknown }>;
-  insert: (rows: unknown) => SupabaseQuery;
-  update: (vals: unknown) => SupabaseQuery;
-};
-
-function supabaseFrom(_table: string): SupabaseQuery {
-  // Placeholder type only — real implementation is the supabase-js client
-  throw new Error("type-only placeholder");
 }

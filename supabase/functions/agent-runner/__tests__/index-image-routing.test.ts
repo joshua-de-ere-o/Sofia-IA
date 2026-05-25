@@ -17,7 +17,7 @@
  */
 
 import { assertEquals } from "https://deno.land/std@0.224.0/assert/mod.ts";
-import { handlePaymentFlow } from "../payment-flow.ts";
+import { handlePaymentFlow, type SupabaseDb } from "../payment-flow.ts";
 
 // ─── Routing condition tests ──────────────────────────────────────────────────
 
@@ -97,7 +97,7 @@ Deno.test("routing — handlePaymentFlow returns Response with status 200 for va
         wamid: "w1",
       },
     };
-    const res = await handlePaymentFlow(body, mockSupabase);
+    const res = await handlePaymentFlow(body, mockSupabase as unknown as SupabaseDb);
     assertEquals(res.status, 200);
   } finally {
     globalThis.fetch = original;
@@ -117,7 +117,7 @@ Deno.test("routing — text fallback: body without cita_id in context returns er
     context: { imagen_recibida: true as const, image_url: "https://x.com/r.jpg" },
   };
 
-  const res = await handlePaymentFlow(body, mockSupabase);
+  const res = await handlePaymentFlow(body, mockSupabase as unknown as SupabaseDb);
   assertEquals(res.status, 200);
   const json = await res.json() as { reason?: string };
   assertEquals(json.reason, "missing_cita_id");
