@@ -1,6 +1,8 @@
 import { NextResponse } from 'next/server';
 import { createClient } from '@supabase/supabase-js';
 import { getModelAdapter } from '@/lib/model-adapter';
+import { sendWhatsAppMessage } from '../../../lib/ycloud.js';
+import { WAME_DEFAULT_PRESET } from '../../../lib/telegram.js';
 
 const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL || '';
 const supabaseServiceKey = process.env.SUPABASE_SERVICE_ROLE_KEY || '';
@@ -57,6 +59,21 @@ async function handleCallbackQuery(callbackQuery) {
       const result = await resolveKellyPending(pendingId, confirmar);
       await answerCallback(callbackQuery, result.toast);
       await replaceButtons(callbackQuery, result.label);
+    }
+    return;
+  }
+
+  if (data.startsWith('payment_confirm_') || data.startsWith('payment_reject_')) {
+    // Always answer first so Telegram stops the loading spinner (FR-12 to FR-17)
+    const isConfirm = data.startsWith('payment_confirm_');
+    const pendingId = isConfirm
+      ? data.replace('payment_confirm_', '')
+      : data.replace('payment_reject_', '');
+
+    if (isConfirm) {
+      await handlePaymentConfirm(pendingId, callbackQuery);
+    } else {
+      await handlePaymentReject(pendingId, callbackQuery);
     }
   }
 }
@@ -525,6 +542,254 @@ function formatFechaParaKely(isoString) {
     timeZone: 'America/Guayaquil', hour: '2-digit', minute: '2-digit', hourCycle: 'h23',
   }).format(d);
   return { fecha, hora };
+}
+
+// ─── Payment approval callbacks (T8b + T8c) ───────────────────────────────────
+
+/**
+ * Edit a photo message caption in Telegram, optionally replacing the inline keyboard.
+ * Used to stamp ✅ or ❌ on Kelly's payment notification message after she acts.
+ */
+async function editPaymentMessageCaption(callbackQuery, prefixLine, replyMarkup) {
+  const token = process.env.TELEGRAM_BOT_TOKEN;
+  const msg = callbackQuery.message;
+  if (!token || !msg?.message_id) return;
+
+  const originalCaption = msg.caption || '';
+  const newCaption = `${prefixLine}\n\n${originalCaption}`;
+
+  const body = {
+    chat_id: msg.chat.id,
+    message_id: msg.message_id,
+    caption: newCaption,
+    parse_mode: 'Markdown',
+  };
+  if (replyMarkup !== undefined) {
+    body.reply_markup = replyMarkup;
+  }
+
+  try {
+    await fetch(`https://api.telegram.org/bot${token}/editMessageCaption`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    });
+  } catch (err) {
+    console.error('[Telegram] editPaymentMessageCaption failed:', err?.message);
+  }
+}
+
+/**
+ * Handles Kelly tapping ✅ (payment_confirm_<pendingId>).
+ *
+ * Flow (FR-12, FR-16, FR-17):
+ *   1. Fetch pending_kelly_actions row.
+ *   2. If not found → answer "Esta acción ya no existe".
+ *   3. If expira_at < NOW() → answer "Esta acción expiró".
+ *   4. Fetch cita. If estado ∈ {confirmada, rechazada} → idempotency answer.
+ *   5. Status-guarded UPDATE citas SET estado='confirmada' WHERE estado='confirmada_provisional'.
+ *   6. UPDATE pagos SET verificado=true.
+ *   7. DELETE FROM pending_kelly_actions.
+ *   8. Edit Telegram caption: prepend "✅ APROBADO POR KELLY", remove all buttons.
+ *   9. Answer callback.
+ *   No WhatsApp message to patient (FR-12).
+ */
+async function handlePaymentConfirm(pendingId, callbackQuery) {
+  // 1. Fetch pending action
+  const { data: pending } = await supabase
+    .from('pending_kelly_actions')
+    .select('id, expira_at, args')
+    .eq('id', pendingId)
+    .single();
+
+  if (!pending) {
+    console.log(`[Telegram] payment_confirm pending not found pending_id=${pendingId}`);
+    await answerCallback(callbackQuery, 'Esta acción ya no existe');
+    return;
+  }
+
+  // 2. Check expiry (FR-17)
+  if (new Date(pending.expira_at) < new Date()) {
+    console.log(`[Telegram] payment_confirm pending_id=${pendingId} expira_at expired`);
+    await answerCallback(callbackQuery, 'Esta acción expiró');
+    return;
+  }
+
+  const { cita_id, pago_id } = pending.args || {};
+
+  // 3. Fetch cita
+  const { data: cita } = await supabase
+    .from('citas')
+    .select('id, estado')
+    .eq('id', cita_id)
+    .single();
+
+  // 4. Idempotency (FR-16)
+  if (cita?.estado === 'confirmada' || cita?.estado === 'rechazada') {
+    console.log(`[Telegram] payment_confirm already_processed cita_id=${cita_id} estado=${cita.estado}`);
+    await answerCallback(callbackQuery, 'Esta cita ya fue procesada');
+    return;
+  }
+
+  // 5. Status-guarded UPDATE citas → confirmada
+  await supabase
+    .from('citas')
+    .update({ estado: 'confirmada' })
+    .eq('id', cita_id)
+    .eq('estado', 'confirmada_provisional');
+
+  // 6. UPDATE pagos → verificado=true
+  await supabase
+    .from('pagos')
+    .update({ verificado: true })
+    .eq('id', pago_id);
+
+  // 7. DELETE pending_kelly_actions row
+  await supabase
+    .from('pending_kelly_actions')
+    .delete()
+    .eq('id', pendingId);
+
+  console.log(`[Telegram] payment_confirm cita_id=${cita_id} pending_id=${pendingId}`);
+
+  // 8. Edit Telegram message — prepend ✅, remove all buttons
+  await editPaymentMessageCaption(
+    callbackQuery,
+    '✅ APROBADO POR KELLY',
+    { inline_keyboard: [] }
+  );
+
+  // 9. Answer callback
+  await answerCallback(callbackQuery, 'Aprobada ✅');
+}
+
+/**
+ * Handles Kelly tapping ❌ (payment_reject_<pendingId>).
+ *
+ * Flow (FR-13, FR-14, FR-15, FR-16, FR-17):
+ *   1-3. Same pre-checks as handlePaymentConfirm.
+ *   4. Status-guarded UPDATE citas SET estado='rechazada'.
+ *   5. DELETE FROM pending_kelly_actions.
+ *   6. Recompute 24h window from conversaciones.last_message_at (FR-15).
+ *   7a. Within 24h → send WA M5 to patient, edit caption with "mensaje enviado", remove buttons.
+ *   7b. Outside 24h → no WA, edit caption with "fuera de ventana 24h", keep 💬 wa.me button.
+ *   8. Answer callback.
+ *   Slot is freed automatically: setting estado='rechazada' excludes the row from
+ *   consultar_disponibilidad via the `.not('estado','in','(cancelada,no_show,rechazada)')` filter.
+ */
+async function handlePaymentReject(pendingId, callbackQuery) {
+  // 1. Fetch pending action
+  const { data: pending } = await supabase
+    .from('pending_kelly_actions')
+    .select('id, expira_at, args')
+    .eq('id', pendingId)
+    .single();
+
+  if (!pending) {
+    console.log(`[Telegram] payment_reject pending not found pending_id=${pendingId}`);
+    await answerCallback(callbackQuery, 'Esta acción ya no existe');
+    return;
+  }
+
+  // 2. Check expiry (FR-17)
+  if (new Date(pending.expira_at) < new Date()) {
+    console.log(`[Telegram] payment_reject pending_id=${pendingId} expired`);
+    await answerCallback(callbackQuery, 'Esta acción expiró');
+    return;
+  }
+
+  const { cita_id, pago_id } = pending.args || {};
+
+  // 3. Fetch cita (need paciente_id for WA window + phone lookup)
+  const { data: cita } = await supabase
+    .from('citas')
+    .select('id, estado, paciente_id')
+    .eq('id', cita_id)
+    .single();
+
+  // 4. Idempotency (FR-16)
+  if (cita?.estado === 'confirmada' || cita?.estado === 'rechazada') {
+    console.log(`[Telegram] payment_reject already_processed cita_id=${cita_id} estado=${cita?.estado}`);
+    await answerCallback(callbackQuery, 'Esta cita ya fue procesada');
+    return;
+  }
+
+  // 5. Status-guarded UPDATE citas → rechazada (frees the slot — rechazada is excluded from
+  //    consultar_disponibilidad once tools.ts is updated to include rechazada in exclusion list)
+  await supabase
+    .from('citas')
+    .update({ estado: 'rechazada' })
+    .eq('id', cita_id)
+    .eq('estado', 'confirmada_provisional');
+
+  // 6. DELETE pending_kelly_actions
+  await supabase
+    .from('pending_kelly_actions')
+    .delete()
+    .eq('id', pendingId);
+
+  // 7. Recompute 24h window AT CLICK TIME (FR-15 — never trust the Telegram snapshot)
+  const pacienteId = cita?.paciente_id;
+  let windowRemainingMs = 0;
+  let patientPhone = null;
+  let patientName = null;
+
+  if (pacienteId) {
+    const [{ data: conv }, { data: paciente }] = await Promise.all([
+      supabase
+        .from('conversaciones')
+        .select('last_message_at')
+        .eq('paciente_id', pacienteId)
+        .order('ultima_actividad', { ascending: false })
+        .limit(1)
+        .single(),
+      supabase
+        .from('pacientes')
+        .select('nombre, telefono')
+        .eq('id', pacienteId)
+        .single(),
+    ]);
+
+    if (conv?.last_message_at) {
+      windowRemainingMs = new Date(conv.last_message_at).getTime() + 24 * 3600 * 1000 - Date.now();
+    }
+    patientPhone = paciente?.telefono ?? null;
+    patientName = (paciente?.nombre ?? '').split(' ')[0] || paciente?.nombre || '';
+  }
+
+  const inWindow = windowRemainingMs > 0;
+
+  if (inWindow) {
+    // Within 24h: send WA rejection message (M5 copy from copy-final, interpolating {{nombre}})
+    if (patientPhone) {
+      const m5 = `Hola ${patientName}, no pude confirmar tu cita porque no recibimos el adelanto correspondiente. Te recordamos que el adelanto es parte de la política de la consulta para reservar el turno. Si quieres reagendar o tuviste algún inconveniente con el pago, cuéntame por acá y lo resolvemos. ¡Quedo atenta!`;
+      await sendWhatsAppMessage(patientPhone, m5);
+      console.log(`[Telegram] payment_reject in_window=true ms_left=${windowRemainingMs}`);
+    }
+    await editPaymentMessageCaption(
+      callbackQuery,
+      '❌ RECHAZADO POR KELLY (mensaje enviado al paciente)',
+      { inline_keyboard: [] }
+    );
+  } else {
+    // Outside 24h: no WA, keep 💬 wa.me button
+    console.log(`[Telegram] payment_reject in_window=false`);
+
+    // Reconstruct wa.me deep-link button (same as telegram-notify.ts built it)
+    const phoneE164 = patientPhone ? patientPhone.replace(/^\+/, '') : '';
+    const waText = WAME_DEFAULT_PRESET.replace('{{nombre}}', patientName);
+    const waUrl = `https://wa.me/${phoneE164}?text=${encodeURIComponent(waText)}`;
+    const waButton = { text: `💬 Escribir a ${patientName}`, url: waUrl };
+
+    await editPaymentMessageCaption(
+      callbackQuery,
+      '❌ RECHAZADO POR KELLY (fuera de ventana 24h)',
+      { inline_keyboard: [[waButton]] }
+    );
+  }
+
+  // 8. Answer callback
+  await answerCallback(callbackQuery, 'Rechazada ❌');
 }
 
 // ─── Resolución de acciones confirmadas ───────────────────────────────────────

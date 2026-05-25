@@ -100,7 +100,7 @@ export async function executeConsultarDisponibilidad(args: any): Promise<string>
       .select('fecha, hora, estado')
       .gte('fecha', fecha_inicio)
       .lte('fecha', fecha_fin)
-      .not('estado', 'in', '(cancelada,no_show)');
+      .not('estado', 'in', '(cancelada,no_show,rechazada)');
       
     if (errorCitas) throw errorCitas;
 
@@ -230,7 +230,7 @@ export async function executeAgendarCita(args: any, context: any): Promise<strin
       .select('id')
       .eq('fecha', fecha)
       .eq('hora', horaNorm)
-      .not('estado', 'in', '(cancelada,no_show)');
+      .not('estado', 'in', '(cancelada,no_show,rechazada)');
 
     if (slotCheck && slotCheck.length > 0) {
       return JSON.stringify({ 
@@ -523,7 +523,7 @@ export async function executeReprogramarCita(args: any, context: any): Promise<s
       .select('id')
       .eq('fecha', nueva_fecha)
       .eq('hora', nuevaHoraNorm)
-      .not('estado', 'in', '(cancelada,no_show)');
+      .not('estado', 'in', '(cancelada,no_show,rechazada)');
 
     if (slotCheck && slotCheck.length > 0) {
       return JSON.stringify({ error: "El nuevo slot ya está ocupado. Intenta con otra fecha/hora." });
