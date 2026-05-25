@@ -40,8 +40,14 @@ vi.mock('crypto', async (importOriginal) => {
   }
 })
 
+// Mock ycloud so sendWhatsAppMessage is controllable in unsupported-branch tests
+vi.mock('../lib/ycloud.js', () => ({
+  sendWhatsAppMessage: vi.fn(async () => ({ success: true })),
+}))
+
 import { createClient } from '@supabase/supabase-js'
 import { uploadComprobante } from '../lib/payments.js'
+import { sendWhatsAppMessage } from '../lib/ycloud.js'
 
 // Helper: create a minimal NextRequest-like object that the route expects
 function makeRequest(body, headers = {}) {
@@ -262,5 +268,269 @@ describe('Webhook image branch — T7', () => {
     expect(agentCalls.length).toBe(1)
     const headers = agentCalls[0][1].headers
     expect(headers['Authorization']).toContain('Bearer')
+  })
+
+  // ── T4: document-typed image cases (S1-webhook, S2-webhook, S5-regression) ──
+
+  // S1-webhook: document payload with image/jpeg mime + document.link → image branch fires
+  it('S1: document payload with image/jpeg mime (document.link) → image branch fires', async () => {
+    const supabase = makeSupabaseMock()
+    createClient.mockReturnValue(supabase)
+    uploadComprobante.mockResolvedValue({
+      success: true,
+      publicUrl: 'https://storage.example.com/comprobantes/pago_wamid-doc-img.jpg',
+      image_path: 'pago_wamid-doc-img.jpg',
+      citaId: 'cita-doc-img',
+      pacienteId: 'pac-doc-img',
+    })
+
+    const documentImagePayload = {
+      type: 'whatsapp.inbound_message.received',
+      whatsappInboundMessage: {
+        id: 'wamid-doc-img-001',
+        wamid: 'wamid-doc-img-001',
+        from: '+593999000111',
+        type: 'document',
+        document: {
+          mime_type: 'image/jpeg',
+          link: 'https://cdn.ycloud.com/abc123',
+          filename: 'comprobante.jpg',
+        },
+      },
+    }
+
+    const { POST } = await import('../app/api/webhook/route.js?v=6')
+    const req = makeRequest(documentImagePayload)
+    const res = await POST(req)
+    const json = await res.json()
+
+    expect(json.received).toBe(true)
+
+    // uploadComprobante MUST be called — confirms normalization rewrote type to 'image'
+    expect(uploadComprobante).toHaveBeenCalledWith(
+      '+593999000111',
+      'wamid-doc-img-001',
+      'https://cdn.ycloud.com/abc123'
+    )
+
+    // agent-runner MUST be dispatched
+    const agentCalls = fetchSpy.mock.calls.filter(([url]) =>
+      typeof url === 'string' && url.includes('agent-runner')
+    )
+    expect(agentCalls.length).toBe(1)
+  })
+
+  // S2-webhook: document with image/jpeg mime but URL only in document.url (fallback chain)
+  it('S2: document payload with image/jpeg mime — URL in document.url (fallback) → image branch fires', async () => {
+    const supabase = makeSupabaseMock()
+    createClient.mockReturnValue(supabase)
+    uploadComprobante.mockResolvedValue({
+      success: true,
+      publicUrl: 'https://storage.example.com/comprobantes/pago_wamid-doc-url.jpg',
+      image_path: 'pago_wamid-doc-url.jpg',
+      citaId: 'cita-doc-url',
+      pacienteId: 'pac-doc-url',
+    })
+
+    const documentImagePayloadUrlFallback = {
+      type: 'whatsapp.inbound_message.received',
+      whatsappInboundMessage: {
+        id: 'wamid-doc-url-001',
+        wamid: 'wamid-doc-url-001',
+        from: '+593999000222',
+        type: 'document',
+        document: {
+          mime_type: 'image/jpeg',
+          // note: no 'link' field — URL is only in 'url'
+          url: 'https://cdn.ycloud.com/fallback-url-field',
+          filename: 'comprobante2.jpg',
+        },
+      },
+    }
+
+    const { POST } = await import('../app/api/webhook/route.js?v=7')
+    const req = makeRequest(documentImagePayloadUrlFallback)
+    const res = await POST(req)
+    const json = await res.json()
+
+    expect(json.received).toBe(true)
+
+    // uploadComprobante must be called with the fallback URL
+    expect(uploadComprobante).toHaveBeenCalledWith(
+      '+593999000222',
+      'wamid-doc-url-001',
+      'https://cdn.ycloud.com/fallback-url-field'
+    )
+  })
+
+  // S5-regression: native type:'image' payload → existing image branch unchanged
+  it('S5: native type:image payload → existing image branch unchanged (no regression)', async () => {
+    const supabase = makeSupabaseMock()
+    createClient.mockReturnValue(supabase)
+    uploadComprobante.mockResolvedValue({
+      success: true,
+      publicUrl: 'https://storage.example.com/comprobantes/pago_wamid-native.jpg',
+      image_path: 'pago_wamid-native.jpg',
+      citaId: 'cita-native',
+      pacienteId: 'pac-native',
+    })
+
+    const { POST } = await import('../app/api/webhook/route.js?v=8')
+    const req = makeRequest(imagePayload('+593999000333', 'https://cdn.ycloud.com/img000', 'wamid-native'))
+    const res = await POST(req)
+    const json = await res.json()
+
+    expect(json.received).toBe(true)
+    expect(uploadComprobante).toHaveBeenCalledWith(
+      '+593999000333',
+      'wamid-native',
+      'https://cdn.ycloud.com/img000'
+    )
+
+    const agentCalls = fetchSpy.mock.calls.filter(([url]) =>
+      typeof url === 'string' && url.includes('agent-runner')
+    )
+    expect(agentCalls.length).toBe(1)
+  })
+
+  // ── T5: unsupported-type and cascade-fix cases (S3-webhook, S4-webhook, S6-webhook) ──
+
+  // We need preFilter to return 'unsupported' for these — override the module-level mock per-test
+  // by using a dedicated mock for the pre-filter inside each test.
+
+  // S3-webhook: PDF document → unsupported branch fires, sendWhatsAppMessage called, agent NOT dispatched
+  it('S3: PDF document → unsupported branch, sendWhatsAppMessage called, agent NOT dispatched, 200 received:true filtered:true reason:unsupported', async () => {
+    const { preFilter } = await import('../lib/pre-filter.js')
+    preFilter.mockResolvedValueOnce({ action: 'unsupported', reply: 'Solo texto e imágenes' })
+
+    const supabase = makeSupabaseMock()
+    createClient.mockReturnValue(supabase)
+
+    // Mock sendWhatsAppMessage — we need it injected via the ycloud mock
+    const { sendWhatsAppMessage } = await import('../lib/ycloud.js')
+    sendWhatsAppMessage.mockResolvedValueOnce({ success: true })
+
+    const pdfPayload = {
+      type: 'whatsapp.inbound_message.received',
+      whatsappInboundMessage: {
+        id: 'wamid-pdf-001',
+        wamid: 'wamid-pdf-001',
+        from: '+593999000444',
+        type: 'document',
+        document: {
+          mime_type: 'application/pdf',
+          link: 'https://cdn.ycloud.com/doc789',
+          filename: 'documento.pdf',
+        },
+      },
+    }
+
+    const { POST } = await import('../app/api/webhook/route.js?v=9')
+    const req = makeRequest(pdfPayload)
+    const res = await POST(req)
+    const json = await res.json()
+
+    expect(json.received).toBe(true)
+    expect(json.filtered).toBe(true)
+    expect(json.reason).toBe('unsupported')
+
+    // sendWhatsAppMessage MUST have been called
+    expect(sendWhatsAppMessage).toHaveBeenCalledWith('+593999000444', 'Solo texto e imágenes')
+
+    // agent-runner must NOT have been dispatched
+    const agentCalls = fetchSpy.mock.calls.filter(([url]) =>
+      typeof url === 'string' && url.includes('agent-runner')
+    )
+    expect(agentCalls.length).toBe(0)
+
+    // uploadComprobante must NOT have been called
+    expect(uploadComprobante).not.toHaveBeenCalled()
+  })
+
+  // S4-webhook: sendWhatsAppMessage returns {success:false} → structured console.error, no throw, 200
+  it('S4: sendWhatsAppMessage returns {success:false} → console.error with structured payload, response 200 reason:unsupported', async () => {
+    const { preFilter } = await import('../lib/pre-filter.js')
+    preFilter.mockResolvedValueOnce({ action: 'unsupported', reply: 'Solo texto e imágenes' })
+
+    const { sendWhatsAppMessage } = await import('../lib/ycloud.js')
+    sendWhatsAppMessage.mockResolvedValueOnce({ success: false, error: 'Credenciales faltantes' })
+
+    const supabase = makeSupabaseMock()
+    createClient.mockReturnValue(supabase)
+
+    const consoleSpy = vi.spyOn(console, 'error')
+
+    const audioPayload = {
+      type: 'whatsapp.inbound_message.received',
+      whatsappInboundMessage: {
+        id: 'wamid-audio-001',
+        wamid: 'wamid-audio-001',
+        from: '+593999000555',
+        type: 'audio',
+        audio: { url: 'https://cdn.ycloud.com/audio.ogg' },
+      },
+    }
+
+    const { POST } = await import('../app/api/webhook/route.js?v=10')
+    const req = makeRequest(audioPayload)
+    const res = await POST(req)
+    const json = await res.json()
+
+    // Must not throw — response is 200
+    expect(json.received).toBe(true)
+    expect(json.filtered).toBe(true)
+    expect(json.reason).toBe('unsupported')
+
+    // console.error MUST have been called with structured JSON containing event:'unsupported_reply_failed'
+    const errorCalls = consoleSpy.mock.calls
+    const structuredCall = errorCalls.find((args) => {
+      try {
+        const parsed = JSON.parse(args[0])
+        return parsed.event === 'unsupported_reply_failed'
+      } catch {
+        return false
+      }
+    })
+    expect(structuredCall).toBeDefined()
+
+    const logObj = JSON.parse(structuredCall[0])
+    expect(logObj.event).toBe('unsupported_reply_failed')
+    expect(logObj.error).toBe('Credenciales faltantes')
+    // phone must be masked — must NOT be the raw number
+    expect(logObj.phone).not.toBe('+593999000555')
+    expect(logObj.phone).toMatch(/\*\*\*/)
+  })
+
+  // S6-webhook: document with null document field → no crash, unsupported reply sent, 200
+  it('S6: document with null document field → no crash, sendWhatsAppMessage called, 200', async () => {
+    const { preFilter } = await import('../lib/pre-filter.js')
+    preFilter.mockResolvedValueOnce({ action: 'unsupported', reply: 'Solo texto e imágenes' })
+
+    const { sendWhatsAppMessage } = await import('../lib/ycloud.js')
+    sendWhatsAppMessage.mockResolvedValueOnce({ success: true })
+
+    const supabase = makeSupabaseMock()
+    createClient.mockReturnValue(supabase)
+
+    const nullDocPayload = {
+      type: 'whatsapp.inbound_message.received',
+      whatsappInboundMessage: {
+        id: 'wamid-nulldoc-001',
+        wamid: 'wamid-nulldoc-001',
+        from: '+593999000666',
+        type: 'document',
+        document: null,
+      },
+    }
+
+    const { POST } = await import('../app/api/webhook/route.js?v=11')
+    const req = makeRequest(nullDocPayload)
+
+    // Must not throw
+    await expect(POST(req)).resolves.toBeDefined()
+    const res = await POST(makeRequest(nullDocPayload))
+    const json = await res.json()
+
+    expect(json.received).toBe(true)
   })
 })

@@ -15,6 +15,30 @@ function maskPhone(phone) {
   return `${phone.slice(0, 5)}***${phone.slice(-4)}`;
 }
 
+/**
+ * Returns true if the MIME type string starts with "image/" (case-insensitive).
+ * Strips RFC-2045 parameters (e.g. "image/jpeg; charset=binary") before testing.
+ * Returns false for null, undefined, empty, or non-image MIME types.
+ */
+function isImageMime(mt) {
+  if (!mt || typeof mt !== 'string') return false
+  return /^image\//i.test(mt.split(';')[0].trim())
+}
+
+/**
+ * Returns the first non-empty string URL candidate from a YCloud document object.
+ * Tries: doc.link → doc.url → doc.mediaUrl → doc.media_url
+ * Returns null if none found or doc is falsy.
+ */
+function pickDocumentUrl(doc) {
+  if (!doc) return null
+  const candidates = [doc.link, doc.url, doc.mediaUrl, doc.media_url]
+  for (const c of candidates) {
+    if (typeof c === 'string' && c.trim() !== '') return c
+  }
+  return null
+}
+
 // YCloud envía eventos con shape:
 //   { type: "whatsapp.inbound_message.received", whatsappInboundMessage: { from, to, type, text:{body}, ... } }
 // Otros eventos (status updates, etc.) usan distintos type y shape.
@@ -22,6 +46,48 @@ function maskPhone(phone) {
 function normalizeYCloudPayload(raw) {
   if (raw?.type === "whatsapp.inbound_message.received" && raw?.whatsappInboundMessage) {
     const m = raw.whatsappInboundMessage;
+
+    // Normalize document-with-image-mime to type:'image' so the pre-filter and
+    // image branch handle it correctly. YCloud sometimes delivers photos sent via
+    // the "attach document" flow with type:'document' instead of type:'image'.
+    let normalizedType = m.type;
+    let normalizedImage = m.image;
+
+    if (m.type === 'document') {
+      // TEMP DIAGNOSTIC (remove after confirming YCloud document shape in production).
+      // Logs which keys YCloud puts on the document object plus the mime_type so we can
+      // verify the URL fallback chain in `pickDocumentUrl` matches reality.
+      // URLs and patient data are NOT logged.
+      console.log(JSON.stringify({
+        level: 'info',
+        scope: '[Webhook]',
+        event: 'document_payload_shape_diagnostic',
+        mime_type: m.document?.mime_type,
+        document_keys: m.document ? Object.keys(m.document) : null,
+      }));
+    }
+
+    if (m.type === 'document' && isImageMime(m.document?.mime_type)) {
+      const url = pickDocumentUrl(m.document);
+      if (url) {
+        normalizedType = 'image';
+        normalizedImage = {
+          url,
+          mime_type: m.document.mime_type,
+          filename: m.document.filename,
+        };
+      } else {
+        // Image mime but no URL candidate found — log for observability (design §7)
+        console.log(JSON.stringify({
+          level: 'warn',
+          scope: '[Webhook]',
+          event: 'document_image_no_url',
+          mime_type: m.document?.mime_type,
+          note: 'document with image mime but no URL candidate found; routing as unsupported',
+        }));
+      }
+    }
+
     return {
       type: "message.created",
       message: {
@@ -29,9 +95,9 @@ function normalizeYCloudPayload(raw) {
         wamid: m.wamid,
         from: m.from,
         from_me: false,
-        type: m.type,
+        type: normalizedType,
         text: m.text,
-        image: m.image,
+        image: normalizedImage,
         audio: m.audio,
         video: m.video,
         document: m.document,
@@ -148,11 +214,28 @@ export async function POST(req) {
     }
 
     if (result.action === "unsupported") {
-      console.log(`[Webhook] Tipo no soportado de ${senderNumber} (${messageType}).`);
+      console.log(`[Webhook] unsupported phone=${maskPhone(senderNumber)} type=${messageType}`);
       try {
-        await sendWhatsAppMessage(senderNumber, result.reply);
+        const sendRes = await sendWhatsAppMessage(senderNumber, result.reply);
+        if (!sendRes?.success) {
+          console.error(JSON.stringify({
+            level: 'error',
+            scope: '[Webhook]',
+            event: 'unsupported_reply_failed',
+            phone: maskPhone(senderNumber),
+            messageType,
+            error: sendRes?.error ?? 'unknown',
+          }));
+        }
       } catch (err) {
-        console.error("[Webhook] Error enviando aviso de tipo no soportado:", err);
+        console.error(JSON.stringify({
+          level: 'error',
+          scope: '[Webhook]',
+          event: 'unsupported_reply_threw',
+          phone: maskPhone(senderNumber),
+          messageType,
+          error: err?.message ?? String(err),
+        }));
       }
       return NextResponse.json({ received: true, filtered: true, reason: "unsupported" });
     }
