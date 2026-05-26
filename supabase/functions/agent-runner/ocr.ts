@@ -46,6 +46,42 @@ function getGeminiOcrModel(): string {
 }
 
 const OCR_TIMEOUT_MS = 8_000;
+const IMAGE_FETCH_TIMEOUT_MS = 5_000;
+
+/**
+ * Fetch an image URL and return its bytes as a base64 string plus the
+ * detected MIME type. Throws on HTTP error or timeout.
+ *
+ * Reason this exists: Gemini's fileData.fileUri mode (passing a URL and
+ * letting Gemini fetch it itself) was rejected with HTTP 400 "Cannot fetch
+ * content from the provided URL" in production 2026-05-26. Switching to
+ * inlineData (embedding base64 bytes in the request) bypasses Gemini's
+ * URL fetcher entirely — we use our own.
+ */
+async function fetchImageAsBase64(
+  url: string,
+): Promise<{ base64: string; mimeType: string }> {
+  const ctrl = new AbortController();
+  const timer = setTimeout(() => ctrl.abort(), IMAGE_FETCH_TIMEOUT_MS);
+  try {
+    const res = await fetch(url, { signal: ctrl.signal });
+    if (!res.ok) {
+      throw new Error(`image_http_${res.status}`);
+    }
+    const mimeType = res.headers.get("content-type")?.split(";")[0].trim() || "image/jpeg";
+    const bytes = new Uint8Array(await res.arrayBuffer());
+    // Chunked base64 encoding — String.fromCharCode.apply on the whole buffer
+    // blows the JS argument-stack limit for images larger than ~64KB.
+    let binary = "";
+    const chunkSize = 8192;
+    for (let i = 0; i < bytes.length; i += chunkSize) {
+      binary += String.fromCharCode(...bytes.subarray(i, i + chunkSize));
+    }
+    return { base64: btoa(binary), mimeType };
+  } finally {
+    clearTimeout(timer);
+  }
+}
 
 // Prompt in Spanish — receipts in Ecuador are Spanish; language match reduces
 // hallucination on numeric formats specific to the Ecuadorian banking UI.
@@ -114,6 +150,20 @@ export async function extractAmountFromReceipt(imageUrl: string): Promise<OcrRes
   const model = getGeminiOcrModel();
   const endpoint = `${GEMINI_API_BASE}/${model}:generateContent`;
 
+  // Fetch the image ourselves and embed as inlineData. Gemini's fileData.fileUri
+  // mode (letting Gemini fetch the URL) was rejected with HTTP 400 in production
+  // 2026-05-26 ("Cannot fetch content from the provided URL") — likely a
+  // Gemini 3.x change or Supabase Storage geo/auth restriction. inlineData
+  // bypasses Gemini's URL fetcher.
+  let imageInline: { base64: string; mimeType: string };
+  try {
+    imageInline = await fetchImageAsBase64(imageUrl);
+  } catch (e) {
+    const msg = e instanceof Error ? e.message : String(e);
+    console.error(`[OCR] Failed to fetch image bytes: ${msg}`);
+    return { monto: null, es_comprobante: true, raw: `image_fetch_${msg}` };
+  }
+
   const ctrl = new AbortController();
   const timer = setTimeout(() => ctrl.abort(), OCR_TIMEOUT_MS);
 
@@ -128,17 +178,13 @@ export async function extractAmountFromReceipt(imageUrl: string): Promise<OcrRes
             role: "user",
             parts: [
               { text: PROMPT_OCR },
-              // fileData (public URL) — active path.
-              // Fallback: inlineData with base64 if Gemini rejects external URLs.
-              { fileData: { fileUri: imageUrl, mimeType: "image/jpeg" } },
+              { inlineData: { mimeType: imageInline.mimeType, data: imageInline.base64 } },
             ],
           },
         ],
         generationConfig: {
           temperature: 0,
           maxOutputTokens: 100,
-          // Disable thinking budget for speed/cost (gemini-2.0-flash supports this)
-          thinkingConfig: { thinkingBudget: 0 },
         },
       }),
     });
