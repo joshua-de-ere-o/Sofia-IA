@@ -145,7 +145,13 @@ export async function extractAmountFromReceipt(imageUrl: string): Promise<OcrRes
 
     if (!res.ok) {
       const raw = `http_${res.status}`;
-      console.error(`[OCR] Gemini HTTP error: ${res.status} (model=${model})`);
+      // Capture response body to surface Google's actual error message.
+      // Without this, all we see is the status code — useless for diagnosing
+      // why a 400 happened (which field is wrong? auth? quota? format?).
+      const errBody = await res.text().catch(() => "<no body>");
+      console.error(
+        `[OCR] Gemini HTTP error: ${res.status} (model=${model}) body=${errBody.slice(0, 500)}`,
+      );
       return { monto: null, es_comprobante: true, raw };
     }
 
