@@ -22,8 +22,28 @@
  * ACTIVE PATH: fileData (public URL). If you switch to inlineData, update this comment.
  */
 
-const GEMINI_ENDPOINT =
-  "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent";
+const GEMINI_API_BASE = "https://generativelanguage.googleapis.com/v1beta/models";
+
+/**
+ * Model resolution order:
+ *   1. GEMINI_OCR_MODEL — explicit OCR-only override (lets us pin a vision-
+ *      strong model independently from the chat model).
+ *   2. GEMINI_MODEL — the chat model, reused if no OCR-specific override.
+ *   3. Hardcoded fallback "gemini-2.5-flash" — a model that exists today.
+ *
+ * Reason this matters: production has historically been pinned to
+ * `gemini-2.0-flash` which was deprecated by Google. The endpoint returned
+ * HTTP 404 silently and payment-flow.ts routed every receipt to M3
+ * (OCR-failed) regardless of image quality. Discovered 2026-05-26 during
+ * end-to-end smoke test.
+ */
+function getGeminiOcrModel(): string {
+  return (
+    Deno.env.get("GEMINI_OCR_MODEL") ||
+    Deno.env.get("GEMINI_MODEL") ||
+    "gemini-2.5-flash"
+  );
+}
 
 const OCR_TIMEOUT_MS = 8_000;
 
@@ -91,11 +111,14 @@ export async function extractAmountFromReceipt(imageUrl: string): Promise<OcrRes
     return { monto: null, es_comprobante: true, raw: "no_api_key" };
   }
 
+  const model = getGeminiOcrModel();
+  const endpoint = `${GEMINI_API_BASE}/${model}:generateContent`;
+
   const ctrl = new AbortController();
   const timer = setTimeout(() => ctrl.abort(), OCR_TIMEOUT_MS);
 
   try {
-    const res = await fetch(`${GEMINI_ENDPOINT}?key=${apiKey}`, {
+    const res = await fetch(`${endpoint}?key=${apiKey}`, {
       method: "POST",
       signal: ctrl.signal,
       headers: { "Content-Type": "application/json" },
@@ -122,7 +145,7 @@ export async function extractAmountFromReceipt(imageUrl: string): Promise<OcrRes
 
     if (!res.ok) {
       const raw = `http_${res.status}`;
-      console.error(`[OCR] Gemini HTTP error: ${res.status}`);
+      console.error(`[OCR] Gemini HTTP error: ${res.status} (model=${model})`);
       return { monto: null, es_comprobante: true, raw };
     }
 
