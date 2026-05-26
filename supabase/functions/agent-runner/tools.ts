@@ -508,7 +508,7 @@ export async function executeReprogramarCita(args: any, context: any): Promise<s
     if (hoursLeft < minHours) {
       return JSON.stringify({ 
         error: "política_incumplida", 
-        mensaje_interno: `Paciente ${isHabitual?'Habitual (req 24h)':'Nuevo (req 48h)'}. Faltan solo ${Math.round(hoursLeft)}h. Informa al paciente que no cumple política y deriva a Kelly usando derivar_a_kelly con historial_resumido.` 
+        mensaje_interno: `Paciente ${isHabitual?'Habitual (req 24h)':'Nuevo (req 48h)'}. Faltan solo ${Math.round(hoursLeft)}h. Informa al paciente que no cumple política y deriva a Kely usando derivar_a_kelly con historial_resumido.` 
       });
     }
 
