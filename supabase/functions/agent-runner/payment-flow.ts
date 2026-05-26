@@ -23,7 +23,7 @@ import { notifyPaymentPendingApproval } from "./telegram-notify.ts";
 // ─── Copy (copy-final, LOCKED) ────────────────────────────────────────────────
 
 const M1 = (monto: string) =>
-  `Recibí tu comprobante de $${monto}, ¡tu cita queda agendada! La Dra. Kelly valida el pago cuando tenga un momento. ¡Te esperamos!`;
+  `Recibí tu comprobante de $${monto}, ¡tu cita queda agendada! La Dra. Kely valida el pago cuando tenga un momento. ¡Te esperamos!`;
 
 const M2 = (montoOcr: string, montoEsperado: string) =>
   `Recibimos un pago de $${montoOcr}, pero la señal de tu cita es $${montoEsperado}. ¿Puedes enviarnos el comprobante por el monto correcto?`;
@@ -221,14 +221,20 @@ export async function handlePaymentFlow(
       montEsperado: cita.monto_adelanto,
     });
 
-    // Telegram notification (best-effort — don't block patient reply on failure)
+    // Send M1 to patient first — patient-facing reply must not be delayed by Telegram latency (FR-5)
+    await sendWA(senderNumber, M1(fmt(montoNorm)));
+
+    // Telegram notification — awaited so the edge runtime does not terminate the
+    // in-flight HTTP request before it resolves (FR-1). .catch() prevents an
+    // unhandled rejection from propagating if notifyPaymentPendingApproval rejects
+    // after the internal try/catch (defense in depth).
     if (pendingData && paciente && conv) {
       const fechaHoraFormatted = new Date(`${cita.fecha}T${cita.hora}`).toLocaleString("es-EC", {
         day: "2-digit", month: "2-digit", year: "numeric",
         hour: "2-digit", minute: "2-digit",
         timeZone: "America/Guayaquil",
       });
-      notifyPaymentPendingApproval({
+      await notifyPaymentPendingApproval({
         pendingId: pendingData.id,
         receiptUrl: image_url,
         nombre: paciente.nombre ?? senderNumber,
@@ -250,7 +256,6 @@ export async function handlePaymentFlow(
         .eq("estado", "activa");
     }
 
-    await sendWA(senderNumber, M1(fmt(montoNorm)));
     return new Response(JSON.stringify({ status: "confirmed_provisional", monto: montoNorm }), { status: 200 });
   }
 
