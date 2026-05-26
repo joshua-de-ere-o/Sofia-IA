@@ -140,6 +140,35 @@ Deno.test("buildPaymentCaption — underpayment shows ⚠️ emoji", () => {
   assertStringIncludes(caption, "⚠️");
 });
 
+Deno.test("buildPaymentCaption — service with underscore renders verbatim (HTML mode)", () => {
+  // Regression: legacy Markdown mode broke on a single `_` in service names
+  // like `alimentario_mensual`. HTML mode must render the underscore as-is.
+  const caption = buildPaymentCaption({
+    nombre: "X",
+    fechaHora: "01/06/2026 10:00",
+    servicio: "alimentario_mensual",
+    objetivo: null,
+    montoOcr: 17.5,
+    montoEsperado: 17.5,
+    lastMessageAt: new Date().toISOString(),
+  });
+  assertStringIncludes(caption, "alimentario_mensual");
+});
+
+Deno.test("buildPaymentCaption — escapes HTML entities in user data", () => {
+  const caption = buildPaymentCaption({
+    nombre: "Ana <Pérez> & Cía",
+    fechaHora: "01/06/2026 10:00",
+    servicio: "Plan",
+    objetivo: "<bajar peso>",
+    montoOcr: 10,
+    montoEsperado: 10,
+    lastMessageAt: new Date().toISOString(),
+  });
+  assertStringIncludes(caption, "Ana &lt;Pérez&gt; &amp; Cía");
+  assertStringIncludes(caption, "&lt;bajar peso&gt;");
+});
+
 // ─── notifyPaymentPendingApproval ─────────────────────────────────────────────
 
 Deno.test("notifyPaymentPendingApproval — calls sendPhoto with correct params", async () => {
