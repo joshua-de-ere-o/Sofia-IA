@@ -309,33 +309,45 @@ export async function POST(req) {
         return NextResponse.json({ received: true, duplicate: true });
       }
 
-      // 4. Fire-and-forget dispatch to agent-runner with imagen_recibida context.
+      // 4. Dispatch to agent-runner with imagen_recibida context.
       //    agent-runner will: run OCR, validate amount, persist pagos row, transition
-      //    cita to confirmada_provisional, notify Kelly via Telegram (PR 3).
+      //    cita to confirmada_provisional, notify Kelly via Telegram.
       //
-      //    The fetch is intentionally NOT awaited — webhook must respond to YCloud
-      //    within ~500ms. agent-runner responds to patient directly via YCloud API.
+      //    The fetch IS awaited. The previous fire-and-forget pattern died on Vercel:
+      //    after the function returned 200 to YCloud, the runtime froze before the
+      //    TCP/TLS handshake to Supabase completed, so agent-runner never received
+      //    the dispatch (observed in production 2026-05-26 — webhook logged
+      //    "image dispatched" but Supabase had zero agent-runner invocations).
+      //    agent-runner returns quickly after kicking off its own background work;
+      //    the extra wait is small and YCloud accepts long webhook responses.
       const agentUrl = `${process.env.NEXT_PUBLIC_SUPABASE_URL}/functions/v1/agent-runner`;
-      fetch(agentUrl, {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          Authorization: `Bearer ${process.env.SUPABASE_SERVICE_ROLE_KEY}`,
-        },
-        body: JSON.stringify({
-          senderNumber,
-          text: "[imagen]",
-          context: {
-            imagen_recibida: true,
-            image_url: uploadRes.publicUrl,
-            image_path: uploadRes.image_path,
-            cita_id: uploadRes.citaId,
-            wamid,
+      try {
+        const agentRes = await fetch(agentUrl, {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            Authorization: `Bearer ${process.env.SUPABASE_SERVICE_ROLE_KEY}`,
           },
-        }),
-      }).catch((e) =>
-        console.error(`[Webhook] agent-runner fire-and-forget failed phone=${maskPhone(senderNumber)}:`, e.message)
-      );
+          body: JSON.stringify({
+            senderNumber,
+            text: "[imagen]",
+            context: {
+              imagen_recibida: true,
+              image_url: uploadRes.publicUrl,
+              image_path: uploadRes.image_path,
+              cita_id: uploadRes.citaId,
+              wamid,
+            },
+          }),
+        });
+
+        if (!agentRes.ok) {
+          const errorBody = await agentRes.text().catch(() => "");
+          console.error(`[Webhook] agent-runner returned ${agentRes.status} phone=${maskPhone(senderNumber)}:`, errorBody);
+        }
+      } catch (e) {
+        console.error(`[Webhook] agent-runner dispatch failed phone=${maskPhone(senderNumber)}:`, e.message);
+      }
 
       console.log(`[Webhook] image dispatched to agent-runner phone=${maskPhone(senderNumber)} wamid=${wamid}`);
       return NextResponse.json({ received: true });
