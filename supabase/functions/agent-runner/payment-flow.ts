@@ -171,13 +171,20 @@ export async function handlePaymentFlow(
   // Branch A: OCR ok + amount matches
   if (montoNorm !== null && amountMatches(montoNorm, cita.monto_adelanto)) {
     // INSERT into pagos
+    //
+    // Schema notes (real production columns, confirmed 2026-05-26 after
+    // PGRST204 error in smoke test):
+    //   - column is `comprobante_url` (NOT `url_comprobante`)
+    //   - `metodo` is NOT NULL with no default. Enum: transfer|cash|payphone.
+    //     WhatsApp comprobante = bank transfer → always 'transfer'.
     const { data: pagoData, error: pagoErr } = (await db.from("pagos")
       .insert({
         cita_id: cita.id,
         monto: montoNorm,
+        metodo: "transfer",
         referencia: wamid ?? image_url,
         verificado: false,
-        url_comprobante: image_url,
+        comprobante_url: image_url,
       })
       .select()
       .single()) as { data: { id: string } | null; error: unknown };
