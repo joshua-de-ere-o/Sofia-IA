@@ -76,8 +76,24 @@ export function buildPaymentKeyboard(params: {
 }
 
 /**
+ * Escape HTML entities for Telegram parse_mode='HTML'.
+ * Only 3 chars need escaping: < > &
+ *
+ * Why HTML instead of Markdown: Telegram's legacy Markdown breaks on any
+ * unbalanced `_` or `*` in dynamic data. A service called `alimentario_mensual`
+ * (real production data, 2026-05-26) made sendPhoto return HTTP 400 "Can't
+ * find end of the entity". HTML mode has a small fixed escape set and never
+ * surprises us on user-supplied content.
+ */
+function escapeHtml(s: string): string {
+  return s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+}
+
+/**
  * Build the Telegram message caption for a pending payment.
  * Exported for testing.
+ *
+ * Uses parse_mode='HTML' formatting (see escapeHtml above).
  */
 export function buildPaymentCaption(params: {
   nombre: string;
@@ -90,15 +106,15 @@ export function buildPaymentCaption(params: {
 }): string {
   const countdown = formatWindowRemaining(params.lastMessageAt);
   const matchEmoji = amountMatches(params.montoOcr, params.montoEsperado) ? "✅" : "⚠️";
-  const objetivoLine = params.objetivo ? `\nObjetivo: ${params.objetivo}` : "";
+  const objetivoLine = params.objetivo ? `\nObjetivo: ${escapeHtml(params.objetivo)}` : "";
 
   return [
-    `💳 *Comprobante pendiente de revisión*`,
-    `Paciente: ${params.nombre}`,
-    `Cita: ${params.fechaHora} — ${params.servicio}`,
+    `💳 <b>Comprobante pendiente de revisión</b>`,
+    `Paciente: ${escapeHtml(params.nombre)}`,
+    `Cita: ${escapeHtml(params.fechaHora)} — ${escapeHtml(params.servicio)}`,
     objetivoLine.trim(),
     `Monto recibido: $${params.montoOcr.toFixed(2)} (señal esperada: $${params.montoEsperado.toFixed(2)}) ${matchEmoji}`,
-    `⏱ Ventana WA: ~${countdown} restantes`,
+    `⏱ Ventana WA: ~${escapeHtml(countdown)} restantes`,
   ].filter(Boolean).join("\n");
 }
 
@@ -140,7 +156,7 @@ export async function notifyPaymentPendingApproval(
         chat_id: chatId,
         photo: params.receiptUrl,
         caption,
-        parse_mode: "Markdown",
+        parse_mode: "HTML",
         reply_markup: replyMarkup,
       }),
     });
@@ -166,7 +182,7 @@ export async function notifyPaymentPendingApproval(
       body: JSON.stringify({
         chat_id: chatId,
         text: `${caption}\n\nComprobante: ${params.receiptUrl}`,
-        parse_mode: "Markdown",
+        parse_mode: "HTML",
         reply_markup: replyMarkup,
       }),
     });
