@@ -533,4 +533,78 @@ describe('Webhook image branch — T7', () => {
 
     expect(json.received).toBe(true)
   })
+
+  // S7: native type:'image' with URL under `link` (not `url`) → fallback chain
+  // normalizes to image.url so the existing image branch works. This reproduces
+  // production behavior observed 2026-05-25: YCloud delivers attached photos as
+  // type:'image' but the URL lives in `image.link`, not `image.url`.
+  it('S7: native image with image.link (no image.url) → normalized + uploadComprobante called with link value', async () => {
+    const supabase = makeSupabaseMock()
+    createClient.mockReturnValue(supabase)
+    uploadComprobante.mockResolvedValue({
+      success: true,
+      publicUrl: 'https://storage.example.com/comprobantes/pago_wamid-link.jpg',
+      image_path: 'pago_wamid-link.jpg',
+      citaId: 'cita-link',
+      pacienteId: 'pac-link',
+    })
+
+    const linkOnlyPayload = {
+      type: 'whatsapp.inbound_message.received',
+      whatsappInboundMessage: {
+        id: 'wamid-link-001',
+        wamid: 'wamid-link-001',
+        from: '+593999000777',
+        type: 'image',
+        image: { link: 'https://cdn.ycloud.com/img-via-link', mime_type: 'image/jpeg' },
+      },
+    }
+
+    const { POST } = await import('../app/api/webhook/route.js?v=12')
+    const req = makeRequest(linkOnlyPayload)
+    const res = await POST(req)
+    const json = await res.json()
+
+    expect(json.received).toBe(true)
+    expect(uploadComprobante).toHaveBeenCalledWith(
+      '+593999000777',
+      'wamid-link-001',
+      'https://cdn.ycloud.com/img-via-link'
+    )
+
+    const agentCalls = fetchSpy.mock.calls.filter(([url]) =>
+      typeof url === 'string' && url.includes('agent-runner')
+    )
+    expect(agentCalls.length).toBe(1)
+  })
+
+  // S8: native image with NO URL in any known field → warning log fires, no upload, no agent dispatch
+  it('S8: native image with no URL in any field → image_no_url log, no upload, no agent dispatch', async () => {
+    const supabase = makeSupabaseMock()
+    createClient.mockReturnValue(supabase)
+
+    const noUrlPayload = {
+      type: 'whatsapp.inbound_message.received',
+      whatsappInboundMessage: {
+        id: 'wamid-no-url',
+        wamid: 'wamid-no-url',
+        from: '+593999000888',
+        type: 'image',
+        image: { mime_type: 'image/jpeg' }, // no url, link, mediaUrl, media_url
+      },
+    }
+
+    const { POST } = await import('../app/api/webhook/route.js?v=13')
+    const req = makeRequest(noUrlPayload)
+    const res = await POST(req)
+    const json = await res.json()
+
+    expect(json.received).toBe(true)
+    expect(uploadComprobante).not.toHaveBeenCalled()
+
+    const agentCalls = fetchSpy.mock.calls.filter(([url]) =>
+      typeof url === 'string' && url.includes('agent-runner')
+    )
+    expect(agentCalls.length).toBe(0)
+  })
 })

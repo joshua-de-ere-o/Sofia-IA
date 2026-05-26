@@ -26,13 +26,14 @@ function isImageMime(mt) {
 }
 
 /**
- * Returns the first non-empty string URL candidate from a YCloud document object.
- * Tries: doc.link → doc.url → doc.mediaUrl → doc.media_url
- * Returns null if none found or doc is falsy.
+ * Returns the first non-empty string URL candidate from a YCloud media object
+ * (works for both `document` and `image` payload shapes).
+ * Tries: obj.link → obj.url → obj.mediaUrl → obj.media_url
+ * Returns null if none found or obj is falsy.
  */
-function pickDocumentUrl(doc) {
-  if (!doc) return null
-  const candidates = [doc.link, doc.url, doc.mediaUrl, doc.media_url]
+function pickMediaUrl(obj) {
+  if (!obj) return null
+  const candidates = [obj.link, obj.url, obj.mediaUrl, obj.media_url]
   for (const c of candidates) {
     if (typeof c === 'string' && c.trim() !== '') return c
   }
@@ -56,7 +57,7 @@ function normalizeYCloudPayload(raw) {
     if (m.type === 'document') {
       // TEMP DIAGNOSTIC (remove after confirming YCloud document shape in production).
       // Logs which keys YCloud puts on the document object plus the mime_type so we can
-      // verify the URL fallback chain in `pickDocumentUrl` matches reality.
+      // verify the URL fallback chain in `pickMediaUrl` matches reality.
       // URLs and patient data are NOT logged.
       console.log(JSON.stringify({
         level: 'info',
@@ -67,8 +68,39 @@ function normalizeYCloudPayload(raw) {
       }));
     }
 
+    if (m.type === 'image') {
+      // TEMP DIAGNOSTIC (remove after confirming YCloud image shape in production).
+      // Production has shown YCloud delivers images sent via 📎 attachment as
+      // `type:'image'` natively, but the URL is NOT under `image.url` — the existing
+      // image branch failed with "image sin imageUrl o wamid". This log reveals the
+      // actual field names so we can confirm the fallback chain catches them.
+      // URLs and patient data are NOT logged.
+      console.log(JSON.stringify({
+        level: 'info',
+        scope: '[Webhook]',
+        event: 'image_payload_shape_diagnostic',
+        mime_type: m.image?.mime_type,
+        image_keys: m.image ? Object.keys(m.image) : null,
+      }));
+
+      // Apply URL fallback chain so downstream code can always read `message.image.url`.
+      const imageUrl = pickMediaUrl(m.image);
+      if (imageUrl) {
+        normalizedImage = { ...m.image, url: imageUrl };
+      } else if (m.image) {
+        console.log(JSON.stringify({
+          level: 'warn',
+          scope: '[Webhook]',
+          event: 'image_no_url',
+          mime_type: m.image?.mime_type,
+          image_keys: Object.keys(m.image),
+          note: 'image payload present but no URL candidate found in known field names',
+        }));
+      }
+    }
+
     if (m.type === 'document' && isImageMime(m.document?.mime_type)) {
-      const url = pickDocumentUrl(m.document);
+      const url = pickMediaUrl(m.document);
       if (url) {
         normalizedType = 'image';
         normalizedImage = {
@@ -77,7 +109,7 @@ function normalizeYCloudPayload(raw) {
           filename: m.document.filename,
         };
       } else {
-        // Image mime but no URL candidate found — log for observability (design §7)
+        // Image mime but no URL candidate found — log for observability
         console.log(JSON.stringify({
           level: 'warn',
           scope: '[Webhook]',
