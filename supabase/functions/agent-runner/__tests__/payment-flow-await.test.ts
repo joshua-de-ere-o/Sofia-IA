@@ -14,3 +14,11 @@ Deno.test("payment-flow.ts awaits notifyPaymentPendingApproval (regression: fire
     "payment-flow.ts must `await notifyPaymentPendingApproval(...)` — fire-and-forget makes Supabase Edge Runtime terminate the Telegram fetch before completion.",
   );
 });
+
+Deno.test("payment-flow.ts anchors cita timestamp to Ecuador time (regression: 2026-05-26 caption showed 24/05 05:00 AM for a 25/05 10:00 AM cita)", async () => {
+  const src = await Deno.readTextFile(new URL("../payment-flow.ts", import.meta.url));
+  assert(
+    /new Date\(`\$\{cita\.fecha\}T\$\{cita\.hora\}-05:00`\)/.test(src),
+    "payment-flow.ts must anchor the cita timestamp with `-05:00` — without it, JS parses the naive string as UTC and toLocaleString to America/Guayaquil subtracts 5 hours.",
+  );
+});

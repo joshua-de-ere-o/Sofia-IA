@@ -28,6 +28,7 @@ export interface TelegramNotifyParams {
   telefono: string;
   fechaHora: string;
   servicio: string;
+  modalidad: string;
   objetivo: string | null;
   montoOcr: number;
   montoEsperado: number;
@@ -99,6 +100,7 @@ export function buildPaymentCaption(params: {
   nombre: string;
   fechaHora: string;
   servicio: string;
+  modalidad: string;
   objetivo: string | null;
   montoOcr: number;
   montoEsperado: number;
@@ -111,7 +113,7 @@ export function buildPaymentCaption(params: {
   return [
     `💳 <b>Comprobante pendiente de revisión</b>`,
     `Paciente: ${escapeHtml(params.nombre)}`,
-    `Cita: ${escapeHtml(params.fechaHora)} — ${escapeHtml(params.servicio)}`,
+    `Cita: ${escapeHtml(params.fechaHora)} — ${escapeHtml(params.servicio)} (${escapeHtml(params.modalidad)})`,
     objetivoLine.trim(),
     `Monto recibido: $${params.montoOcr.toFixed(2)} (señal esperada: $${params.montoEsperado.toFixed(2)}) ${matchEmoji}`,
     `⏱ Ventana WA: ~${escapeHtml(countdown)} restantes`,
