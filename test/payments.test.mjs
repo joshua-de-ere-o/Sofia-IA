@@ -16,13 +16,16 @@ import { describe, it, expect, vi, beforeEach } from 'vitest'
 
 // --- Supabase mock factory ---
 function makeSupabaseMock({ uploadError = null, pacienteData = null, pacienteError = null, citaData = null, citaError = null } = {}) {
-  const getPublicUrl = vi.fn(() => ({ data: { publicUrl: 'https://storage.example.com/comprobantes/pago_test.jpg' } }))
+  const createSignedUrl = vi.fn(async () => ({
+    data: { signedUrl: 'https://storage.example.com/comprobantes/pago_test.jpg?token=signed' },
+    error: null,
+  }))
   const upload = vi.fn(async () => ({ data: { path: 'pago_test.jpg' }, error: uploadError }))
 
   const storageMock = {
     from: vi.fn(() => ({
       upload,
-      getPublicUrl,
+      createSignedUrl,
     })),
   }
 
@@ -149,6 +152,50 @@ describe('uploadComprobante — missing cita', () => {
 
     expect(result.success).toBe(false)
     expect(result.error).toMatch(/cita/i)
+  })
+})
+
+describe('uploadComprobante — signed URL behavior', () => {
+  it('uses createSignedUrl with 24h TTL (matches pending_kelly_actions window)', async () => {
+    const createSignedUrlSpy = vi.fn(async () => ({
+      data: { signedUrl: 'https://storage.example.com/comprobantes/pago_test.jpg?token=signed' },
+      error: null,
+    }))
+    const supabase = makeSupabaseMock({
+      pacienteData: { id: 'paciente-123' },
+      citaData: { id: 'cita-456', servicio: 'Consulta', monto_adelanto: 17.5 },
+    })
+    // Override storage.from to inject our spy
+    supabase.storage.from = vi.fn(() => ({
+      upload: vi.fn(async () => ({ data: { path: 'pago_test.jpg' }, error: null })),
+      createSignedUrl: createSignedUrlSpy,
+    }))
+    createClient.mockReturnValue(supabase)
+
+    const { uploadComprobante } = await import('../lib/payments.js?v=signed1')
+    const result = await uploadComprobante('+593999000111', 'wamid-signed', 'https://example.com/img.jpg')
+
+    expect(result.success).toBe(true)
+    expect(result.publicUrl).toContain('token=signed')
+    expect(createSignedUrlSpy).toHaveBeenCalledWith('pago_wamid-signed.jpg', 24 * 60 * 60)
+  })
+
+  it('returns error when createSignedUrl fails', async () => {
+    const supabase = makeSupabaseMock({
+      pacienteData: { id: 'paciente-123' },
+      citaData: { id: 'cita-456', servicio: 'Consulta', monto_adelanto: 17.5 },
+    })
+    supabase.storage.from = vi.fn(() => ({
+      upload: vi.fn(async () => ({ data: { path: 'pago_test.jpg' }, error: null })),
+      createSignedUrl: vi.fn(async () => ({ data: null, error: new Error('signing failed') })),
+    }))
+    createClient.mockReturnValue(supabase)
+
+    const { uploadComprobante } = await import('../lib/payments.js?v=signed2')
+    const result = await uploadComprobante('+593999000111', 'wamid-failsign', 'https://example.com/img.jpg')
+
+    expect(result.success).toBe(false)
+    expect(result.error).toMatch(/signing failed/i)
   })
 })
 
