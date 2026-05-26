@@ -188,13 +188,13 @@ export async function executeConsultarDisponibilidad(args: any): Promise<string>
  * Registra un paciente y le agenda una cita.
  * Si la zona es 'sur', la cita se confirma. Si no, queda en 'pendiente_pago'.
  */
-export async function executeAgendarCita(args: any, context: any): Promise<string> {
+export async function executeAgendarCita(args: any, context: any, supabaseOverride?: ReturnType<typeof getSupabase>): Promise<string> {
   const {
-    paciente_nombre, paciente_fecha_nacimiento, paciente_telefono, paciente_email,
+    paciente_nombre, paciente_fecha_nacimiento, paciente_email,
     servicio_id, fecha, hora, modalidad, zona, motivo, monto_adelanto, precio_total
   } = args;
 
-  if (!paciente_nombre || !paciente_telefono || !servicio_id || !fecha || !hora || !modalidad || !zona) {
+  if (!paciente_nombre || !servicio_id || !fecha || !hora || !modalidad || !zona) {
     return JSON.stringify({ error: "Faltan parámetros requeridos para agendar la cita" });
   }
 
@@ -217,8 +217,23 @@ export async function executeAgendarCita(args: any, context: any): Promise<strin
   }
 
   try {
-    const supabase = getSupabase();
-    const { conversacion_id } = context ?? {};
+    const supabase = supabaseOverride ?? getSupabase();
+    const { conversacion_id, senderNumber } = context ?? {};
+
+    // Guard: senderNumber is server-owned identity — must always be present
+    if (!senderNumber || typeof senderNumber !== "string" || senderNumber.trim() === "") {
+      console.error("[agendar_cita] missing senderNumber in context", { conversacion_id });
+      return JSON.stringify({ error: "Identidad del paciente no disponible en el contexto del chat." });
+    }
+
+    // Observability: warn if LLM still supplies paciente_telefono (schema-removal regression detector)
+    if (args.paciente_telefono && args.paciente_telefono !== senderNumber) {
+      console.warn("[agendar_cita] LLM supplied paciente_telefono differs from senderNumber", {
+        llm_value_type: typeof args.paciente_telefono,
+        sender_len: senderNumber.length,
+        conversacion_id,
+      });
+    }
 
     // Normalizar hora a HH:MM:SS — el LLM puede enviar "9:00" o "09:00"
     const [hPart, mPart] = String(hora).split(':');
@@ -244,7 +259,7 @@ export async function executeAgendarCita(args: any, context: any): Promise<strin
     const { data: existingPatient } = await supabase
       .from('pacientes')
       .select('id')
-      .eq('telefono', paciente_telefono)
+      .eq('telefono', senderNumber)
       .single();
 
     if (existingPatient) {
@@ -262,7 +277,7 @@ export async function executeAgendarCita(args: any, context: any): Promise<strin
         .insert({
           nombre: paciente_nombre,
           fecha_nacimiento: paciente_fecha_nacimiento || null,
-          telefono: paciente_telefono,
+          telefono: senderNumber,
           email: paciente_email || null,
           zona: zona
         })

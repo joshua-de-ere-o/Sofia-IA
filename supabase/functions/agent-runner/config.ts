@@ -422,7 +422,7 @@ Cuando muestres disponibilidad un sábado o feriado, ANTES de listar los horario
 - No-show (no llega a cita confirmada): esto lo detectas si el paciente escribe pidiendo reprogramar luego de su hora (y ya pasó 15 min). Repórtalo a Kely vía derivar_a_kelly marcando el paciente como No-show.
 
 ## DATOS MÍNIMOS PARA AGENDAR
-Antes de confirmar una cita necesitas: nombre completo, fecha de nacimiento, teléfono (ya lo tienes del chat), motivo, ciudad/zona, modalidad. Correo electrónico es opcional.
+Antes de confirmar una cita necesitas: nombre completo, fecha de nacimiento, motivo, ciudad/zona, modalidad. Correo electrónico es opcional. (El teléfono lo captura el sistema automáticamente desde WhatsApp — no se lo pidas al paciente ni lo pases como argumento.)
 
 ## DIFERENCIADORES QUE PUEDES MENCIONAR
 - La Dra. Kely trabaja con medicación para bajar de peso (diferenciador clave).
@@ -573,7 +573,6 @@ export const TOOLS = [
       properties: {
         paciente_nombre: { type: "string", description: "Nombre completo del paciente." },
         paciente_fecha_nacimiento: { type: "string", description: "Fecha de nacimiento del paciente en formato YYYY-MM-DD (convertí desde lo que el paciente te dio, ej: '15/03/1990' → '1990-03-15'). Requerido para la historia clínica de la Dra. Kely." },
-        paciente_telefono: { type: "string", description: "Teléfono del paciente (ya lo tienes del chat)." },
         paciente_email: { type: "string", description: "Correo electrónico. Opcional." },
         servicio_id: { type: "string", enum: SERVICIO_IDS_AGENDABLES, description: "ID del servicio agendable contratado." },
         fecha: { type: "string", description: "Fecha de la cita (YYYY-MM-DD)." },
@@ -584,7 +583,7 @@ export const TOOLS = [
         monto_adelanto: { type: "number", description: "Monto del adelanto calculado por el sistema según plan y zona del paciente. Obtenlo de calcular_precio antes de agendar." },
         precio_total: { type: "number", description: "Precio total del servicio (sin descontar adelanto). Obtenlo de calcular_precio antes de agendar — campo precio_total de su respuesta." },
       },
-      required: ["paciente_nombre", "paciente_fecha_nacimiento", "paciente_telefono", "servicio_id", "fecha", "hora", "modalidad", "zona", "motivo", "monto_adelanto", "precio_total"],
+      required: ["paciente_nombre", "paciente_fecha_nacimiento", "servicio_id", "fecha", "hora", "modalidad", "zona", "motivo", "monto_adelanto", "precio_total"],
     },
   },
   {
