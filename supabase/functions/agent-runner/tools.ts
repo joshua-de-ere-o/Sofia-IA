@@ -575,9 +575,11 @@ export async function executeConfirmarMontoComprobante(
     }
 
     // 2. Load cita
+    //    Schema note: citas uses `servicio` (text) + separate `fecha`/`hora`,
+    //    not `servicio_id`/`fecha_hora` (confirmed 2026-05-26).
     const { data: cita } = await supabase
       .from("citas")
-      .select("id, monto_adelanto, estado, paciente_id, servicio_id, fecha_hora")
+      .select("id, monto_adelanto, estado, paciente_id, servicio, fecha, hora")
       .eq("id", citaId)
       .single();
 
