@@ -508,7 +508,7 @@ export async function executeReprogramarCita(args: any, context: any): Promise<s
     if (hoursLeft < minHours) {
       return JSON.stringify({ 
         error: "política_incumplida", 
-        mensaje_interno: `Paciente ${isHabitual?'Habitual (req 24h)':'Nuevo (req 48h)'}. Faltan solo ${Math.round(hoursLeft)}h. Informa al paciente que no cumple política y deriva a Kelly usando derivar_a_kelly con historial_resumido.` 
+        mensaje_interno: `Paciente ${isHabitual?'Habitual (req 24h)':'Nuevo (req 48h)'}. Faltan solo ${Math.round(hoursLeft)}h. Informa al paciente que no cumple política y deriva a Kely usando derivar_a_kelly con historial_resumido.` 
       });
     }
 
@@ -660,7 +660,7 @@ export async function executeConfirmarMontoComprobante(
     return JSON.stringify({
       status: "confirmed_provisional",
       monto: montoNorm,
-      mensaje_sofia: "Gracias por confirmarme el monto. ¡Tu cita queda agendada! La Dra. Kelly valida el pago cuando tenga un momento. ¡Te esperamos!",
+      mensaje_sofia: "Gracias por confirmarme el monto. ¡Tu cita queda agendada! La Dra. Kely valida el pago cuando tenga un momento. ¡Te esperamos!",
     });
   } catch (err: any) {
     logPaymentEvent("text_fallback_error", { reason: err?.message });

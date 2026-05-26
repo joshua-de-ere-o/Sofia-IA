@@ -1,6 +1,6 @@
-# 🩺 Sistema IA Dra. Kelly
+# 🩺 Sistema IA Dra. Kely
 
-**Sistema IA Dra. Kelly** es una plataforma integral de gestión de citas y CRM médico impulsada por Inteligencia Artificial. Está diseñada para automatizar la atención de pacientes a través de WhatsApp, ofreciendo agendamiento automatizado, pagos integrados, notificaciones proactivas de recordatorios y un panel de administración CRM completo.
+**Sistema IA Dra. Kely** es una plataforma integral de gestión de citas y CRM médico impulsada por Inteligencia Artificial. Está diseñada para automatizar la atención de pacientes a través de WhatsApp, ofreciendo agendamiento automatizado, pagos integrados, notificaciones proactivas de recordatorios y un panel de administración CRM completo.
 
 ---
 
@@ -102,4 +102,4 @@ El sistema actualmente cuenta con su arquitectura fundacional desplegada (refere
 - Integración final avanzada de tarifas zonales para pagos.
 
 ---
-Elaborado para **Sistema IA Dra. Kelly**.
+Elaborado para **Sistema IA Dra. Kely**.
