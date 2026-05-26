@@ -86,6 +86,7 @@ Deno.test("buildPaymentCaption — includes patient name and service", () => {
     nombre: "Maria López",
     fechaHora: "01/06/2026 10:00",
     servicio: "Plan Mensual",
+    modalidad: "virtual",
     objetivo: null,
     montoOcr: 17.5,
     montoEsperado: 17.5,
@@ -101,6 +102,7 @@ Deno.test("buildPaymentCaption — omits objetivo line when null", () => {
     nombre: "X",
     fechaHora: "01/06/2026 10:00",
     servicio: "Plan",
+    modalidad: "virtual",
     objetivo: null,
     montoOcr: 10,
     montoEsperado: 10,
@@ -114,6 +116,7 @@ Deno.test("buildPaymentCaption — includes objetivo when present", () => {
     nombre: "X",
     fechaHora: "01/06/2026 10:00",
     servicio: "Plan",
+    modalidad: "virtual",
     objetivo: "bajar de peso",
     montoOcr: 10,
     montoEsperado: 10,
@@ -125,6 +128,7 @@ Deno.test("buildPaymentCaption — includes objetivo when present", () => {
 Deno.test("buildPaymentCaption — match shows ✅ emoji", () => {
   const caption = buildPaymentCaption({
     nombre: "X", fechaHora: "01/06/2026 10:00", servicio: "Plan",
+    modalidad: "virtual",
     objetivo: null, montoOcr: 20, montoEsperado: 17.5,
     lastMessageAt: new Date().toISOString(),
   });
@@ -134,6 +138,7 @@ Deno.test("buildPaymentCaption — match shows ✅ emoji", () => {
 Deno.test("buildPaymentCaption — underpayment shows ⚠️ emoji", () => {
   const caption = buildPaymentCaption({
     nombre: "X", fechaHora: "01/06/2026 10:00", servicio: "Plan",
+    modalidad: "virtual",
     objetivo: null, montoOcr: 5, montoEsperado: 17.5,
     lastMessageAt: new Date().toISOString(),
   });
@@ -147,6 +152,7 @@ Deno.test("buildPaymentCaption — service with underscore renders verbatim (HTM
     nombre: "X",
     fechaHora: "01/06/2026 10:00",
     servicio: "alimentario_mensual",
+    modalidad: "virtual",
     objetivo: null,
     montoOcr: 17.5,
     montoEsperado: 17.5,
@@ -155,11 +161,26 @@ Deno.test("buildPaymentCaption — service with underscore renders verbatim (HTM
   assertStringIncludes(caption, "alimentario_mensual");
 });
 
+Deno.test("buildPaymentCaption — includes modalidad inline with servicio (regression: 2026-05-26 missing modalidad)", () => {
+  const caption = buildPaymentCaption({
+    nombre: "X",
+    fechaHora: "01/06/2026 10:00",
+    servicio: "alimentario_mensual",
+    modalidad: "virtual",
+    objetivo: null,
+    montoOcr: 17.5,
+    montoEsperado: 17.5,
+    lastMessageAt: new Date().toISOString(),
+  });
+  assertStringIncludes(caption, "alimentario_mensual (virtual)");
+});
+
 Deno.test("buildPaymentCaption — escapes HTML entities in user data", () => {
   const caption = buildPaymentCaption({
     nombre: "Ana <Pérez> & Cía",
     fechaHora: "01/06/2026 10:00",
     servicio: "Plan",
+    modalidad: "virtual",
     objetivo: "<bajar peso>",
     montoOcr: 10,
     montoEsperado: 10,
@@ -196,6 +217,7 @@ Deno.test("notifyPaymentPendingApproval — calls sendPhoto with correct params"
       telefono: "+593987654321",
       fechaHora: "01/06/2026 10:00",
       servicio: "Plan Mensual",
+      modalidad: "virtual",
       objetivo: "bajar de peso",
       montoOcr: 17.5,
       montoEsperado: 17.5,
@@ -235,6 +257,7 @@ Deno.test("notifyPaymentPendingApproval — falls back to sendMessage if sendPho
       telefono: "+593",
       fechaHora: "01/06/2026 10:00",
       servicio: "Plan",
+      modalidad: "virtual",
       objetivo: null,
       montoOcr: 10,
       montoEsperado: 10,
@@ -260,6 +283,7 @@ Deno.test("notifyPaymentPendingApproval — returns without error if env vars mi
     telefono: "+1",
     fechaHora: "01/06/2026 10:00",
     servicio: "Plan",
+    modalidad: "virtual",
     objetivo: null,
     montoOcr: 10,
     montoEsperado: 10,

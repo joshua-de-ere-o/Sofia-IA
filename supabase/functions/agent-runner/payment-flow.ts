@@ -111,7 +111,7 @@ export async function handlePaymentFlow(
   // both are wrong against the actual production schema (confirmed
   // 2026-05-26 — first end-to-end smoke test after PRs #6, #7, #8).
   const { data: cita, error: citaErr } = (await db.from("citas")
-    .select("id, monto_adelanto, estado, servicio, fecha, hora, paciente_id")
+    .select("id, monto_adelanto, estado, servicio, fecha, hora, modalidad, paciente_id")
     .eq("id", cita_id)
     .single()) as { data: CitaRow | null; error: unknown };
 
@@ -239,7 +239,12 @@ export async function handlePaymentFlow(
       const reason = !pendingData ? "pending_null" : !paciente ? "paciente_null" : "conv_null";
       logPaymentEvent("tg_notify_skipped", { citaId: cita.id, reason });
     } else {
-      const fechaHoraFormatted = new Date(`${cita.fecha}T${cita.hora}`).toLocaleString("es-EC", {
+      // Anchor the cita timestamp to Ecuador time (-05:00). Without an explicit
+      // offset, `new Date("YYYY-MM-DDTHH:mm:ss")` is parsed as runtime-local
+      // (UTC in Supabase Edge), then toLocaleString converts back to Guayaquil
+      // and silently subtracts 5 hours — surfaced 2026-05-26 when Kely received
+      // "24/05/2026 05:00 am" for a cita stored as 2026-05-25 10:00:00.
+      const fechaHoraFormatted = new Date(`${cita.fecha}T${cita.hora}-05:00`).toLocaleString("es-EC", {
         day: "2-digit", month: "2-digit", year: "numeric",
         hour: "2-digit", minute: "2-digit",
         timeZone: "America/Guayaquil",
@@ -251,6 +256,7 @@ export async function handlePaymentFlow(
         telefono: paciente.telefono ?? senderNumber,
         fechaHora: fechaHoraFormatted,
         servicio: cita.servicio,
+        modalidad: cita.modalidad,
         objetivo: null,
         montoOcr: montoNorm,
         montoEsperado: cita.monto_adelanto,
@@ -323,6 +329,7 @@ interface CitaRow {
   servicio: string;
   fecha: string;
   hora: string;
+  modalidad: string;
   paciente_id: string;
 }
 
