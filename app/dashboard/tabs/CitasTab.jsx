@@ -8,6 +8,7 @@ import { useCitas } from '../hooks/useCitas'
 import { CitasTable } from '../components/CitasTable'
 import { CitaCard } from '../components/CitaCard'
 import { CitasCalendar } from '../components/CitasCalendar'
+import { HorariosEspecialesCard } from '../components/HorariosEspecialesCard'
 
 export function CitasTab() {
   const { citas, loading, actionLoading, handleEstado, handleVerificarPago, handleReagendar, openVoucher } = useCitas()
@@ -164,6 +165,9 @@ export function CitasTab() {
           ))
         )}
       </div>
+
+      {/* Horarios especiales — collapsible card below agenda (ADR-7) */}
+      <HorariosEspecialesCard />
     </div>
   )
 }
