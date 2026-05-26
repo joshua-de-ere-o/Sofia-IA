@@ -139,7 +139,7 @@ export async function handlePaymentFlow(
   //    text label (e.g. "alimentario_mensual").
   const [pacResult, convResult] = (await Promise.all([
     db.from("pacientes")
-      .select("nombre, telefono, objetivo")
+      .select("nombre, telefono")
       .eq("id", cita.paciente_id)
       .single(),
     db.from("conversaciones")
@@ -154,6 +154,13 @@ export async function handlePaymentFlow(
 
   const paciente = pacResult.data;
   const conv = convResult.data;
+
+  if (pacResult.error) {
+    console.error("[Payment-Flow] pacientes lookup failed:", { error: pacResult.error, citaId: cita.id });
+  }
+  if (convResult.error) {
+    console.error("[Payment-Flow] conversaciones lookup failed:", { error: convResult.error, citaId: cita.id });
+  }
 
   // 5. Run OCR
   logPaymentEvent("ocr_start", { citaId: cita.id, imagePath: image_url });
@@ -228,7 +235,10 @@ export async function handlePaymentFlow(
     // in-flight HTTP request before it resolves (FR-1). .catch() prevents an
     // unhandled rejection from propagating if notifyPaymentPendingApproval rejects
     // after the internal try/catch (defense in depth).
-    if (pendingData && paciente && conv) {
+    if (!pendingData || !paciente || !conv) {
+      const reason = !pendingData ? "pending_null" : !paciente ? "paciente_null" : "conv_null";
+      logPaymentEvent("tg_notify_skipped", { citaId: cita.id, reason });
+    } else {
       const fechaHoraFormatted = new Date(`${cita.fecha}T${cita.hora}`).toLocaleString("es-EC", {
         day: "2-digit", month: "2-digit", year: "numeric",
         hour: "2-digit", minute: "2-digit",
@@ -241,7 +251,7 @@ export async function handlePaymentFlow(
         telefono: paciente.telefono ?? senderNumber,
         fechaHora: fechaHoraFormatted,
         servicio: cita.servicio,
-        objetivo: paciente.objetivo ?? null,
+        objetivo: null,
         montoOcr: montoNorm,
         montoEsperado: cita.monto_adelanto,
         lastMessageAt: conv.last_message_at,
@@ -319,7 +329,6 @@ interface CitaRow {
 interface PacienteRow {
   nombre: string | null;
   telefono: string | null;
-  objetivo: string | null;
 }
 
 interface ConvRow {
