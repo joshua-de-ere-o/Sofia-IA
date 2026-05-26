@@ -615,15 +615,18 @@ export async function executeConfirmarMontoComprobante(
     // 4. Match! Apply same side-effects as OCR-ok-match path
     const expiraAt = new Date(Date.now() + 24 * 3_600_000).toISOString();
 
-    // Insert pago (referencia = "texto_paciente" to distinguish from OCR path)
+    // Insert pago (referencia = "texto_paciente" to distinguish from OCR path).
+    // Schema: column is `comprobante_url` and `metodo` is NOT NULL (enum
+    // transfer|cash|payphone) — same fix as payment-flow.ts on 2026-05-26.
     const { data: pagoData } = await supabase
       .from("pagos")
       .insert({
         cita_id: cita.id,
         monto: montoNorm,
+        metodo: "transfer",
         referencia: `texto_${ctx.conversacion_id}`,
         verificado: false,
-        url_comprobante: null,
+        comprobante_url: null,
       })
       .select()
       .single();
