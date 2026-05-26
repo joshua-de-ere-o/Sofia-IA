@@ -104,8 +104,14 @@ export async function handlePaymentFlow(
   }
 
   // 1. Fetch cita
+  //
+  // Schema note: the `citas` table uses `servicio` (text, free label like
+  // "alimentario_mensual") and separate `fecha` (date) + `hora` (time)
+  // columns. Earlier code assumed `servicio_id` FK + `fecha_hora` timestamp;
+  // both are wrong against the actual production schema (confirmed
+  // 2026-05-26 — first end-to-end smoke test after PRs #6, #7, #8).
   const { data: cita, error: citaErr } = (await db.from("citas")
-    .select("id, monto_adelanto, estado, servicio_id, fecha_hora, paciente_id")
+    .select("id, monto_adelanto, estado, servicio, fecha, hora, paciente_id")
     .eq("id", cita_id)
     .single()) as { data: CitaRow | null; error: unknown };
 
@@ -128,15 +134,13 @@ export async function handlePaymentFlow(
     return new Response(JSON.stringify({ status: "duplicate" }), { status: 200 });
   }
 
-  // 4. Fetch paciente + servicio + conversacion for Telegram message
-  const [pacResult, svcResult, convResult] = (await Promise.all([
+  // 4. Fetch paciente + conversacion for Telegram message.
+  //    Note: there is no `servicios` table — `cita.servicio` is already the
+  //    text label (e.g. "alimentario_mensual").
+  const [pacResult, convResult] = (await Promise.all([
     db.from("pacientes")
       .select("nombre, telefono, objetivo")
       .eq("id", cita.paciente_id)
-      .single(),
-    db.from("servicios")
-      .select("nombre")
-      .eq("id", cita.servicio_id)
       .single(),
     db.from("conversaciones")
       .select("id, last_message_at")
@@ -145,12 +149,10 @@ export async function handlePaymentFlow(
       .single(),
   ])) as [
     { data: PacienteRow | null; error: unknown },
-    { data: { nombre: string } | null; error: unknown },
     { data: ConvRow | null; error: unknown },
   ];
 
   const paciente = pacResult.data;
-  const servicio = svcResult.data;
   const conv = convResult.data;
 
   // 5. Run OCR
@@ -214,7 +216,7 @@ export async function handlePaymentFlow(
 
     // Telegram notification (best-effort — don't block patient reply on failure)
     if (pendingData && paciente && conv) {
-      const fechaHoraFormatted = new Date(cita.fecha_hora).toLocaleString("es-EC", {
+      const fechaHoraFormatted = new Date(`${cita.fecha}T${cita.hora}`).toLocaleString("es-EC", {
         day: "2-digit", month: "2-digit", year: "numeric",
         hour: "2-digit", minute: "2-digit",
         timeZone: "America/Guayaquil",
@@ -225,7 +227,7 @@ export async function handlePaymentFlow(
         nombre: paciente.nombre ?? senderNumber,
         telefono: paciente.telefono ?? senderNumber,
         fechaHora: fechaHoraFormatted,
-        servicio: servicio?.nombre ?? cita.servicio_id,
+        servicio: cita.servicio,
         objetivo: paciente.objetivo ?? null,
         montoOcr: montoNorm,
         montoEsperado: cita.monto_adelanto,
@@ -296,8 +298,9 @@ interface CitaRow {
   id: string;
   monto_adelanto: number;
   estado: string;
-  servicio_id: string;
-  fecha_hora: string;
+  servicio: string;
+  fecha: string;
+  hora: string;
   paciente_id: string;
 }
 
