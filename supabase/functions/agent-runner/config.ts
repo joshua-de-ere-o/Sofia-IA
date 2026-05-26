@@ -419,7 +419,7 @@ Cuando muestres disponibilidad un sábado o feriado, ANTES de listar los horario
 - Cancelación: mínimo 24 horas de anticipación para todos los pacientes.
 - Reprogramación: 24 horas para pacientes habituales, 48 horas para pacientes nuevos.
 - Si el paciente NO cumple la anticipación mínima (es decir, avisa con menos antelación), INFORMA el motivo indicando que por políticas de la clínica no puedes procesarlo automáticamente y usa la herramienta derivar_a_kelly para pasarle el caso a ella.
-- No-show (no llega a cita confirmada): esto lo detectas si el paciente escribe pidiendo reprogramar luego de su hora (y ya pasó 15 min). Repórtalo a Kelly vía derivar_a_kelly marcando el paciente como No-show.
+- No-show (no llega a cita confirmada): esto lo detectas si el paciente escribe pidiendo reprogramar luego de su hora (y ya pasó 15 min). Repórtalo a Kely vía derivar_a_kelly marcando el paciente como No-show.
 
 ## DATOS MÍNIMOS PARA AGENDAR
 Antes de confirmar una cita necesitas: nombre completo, fecha de nacimiento, teléfono (ya lo tienes del chat), motivo, ciudad/zona, modalidad. Correo electrónico es opcional.
@@ -600,7 +600,7 @@ export const TOOLS = [
           description: "Motivo de derivación. Elegí el más específico; usá 'default' si ninguno encaja.",
         },
         nivel_urgencia: { type: "string", enum: ["alto", "medio", "bajo"], description: "Nivel de urgencia." },
-        historial_resumido: { type: "string", description: "Resumen breve de la conversación para contexto de Kelly." },
+        historial_resumido: { type: "string", description: "Resumen breve de la conversación para contexto de Kely." },
       },
       required: ["motivo", "historial_resumido"],
     },

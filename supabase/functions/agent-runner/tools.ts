@@ -660,7 +660,7 @@ export async function executeConfirmarMontoComprobante(
     return JSON.stringify({
       status: "confirmed_provisional",
       monto: montoNorm,
-      mensaje_sofia: "Gracias por confirmarme el monto. ¡Tu cita queda agendada! La Dra. Kelly valida el pago cuando tenga un momento. ¡Te esperamos!",
+      mensaje_sofia: "Gracias por confirmarme el monto. ¡Tu cita queda agendada! La Dra. Kely valida el pago cuando tenga un momento. ¡Te esperamos!",
     });
   } catch (err: any) {
     logPaymentEvent("text_fallback_error", { reason: err?.message });
