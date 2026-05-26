@@ -126,6 +126,17 @@ function withMockedFetch(
   });
 }
 
+// Helper: intercept console.log and console.error for assertions
+function captureLogs(): { logs: string[]; errors: string[]; restore: () => void } {
+  const logs: string[] = [];
+  const errors: string[] = [];
+  const origLog = console.log;
+  const origErr = console.error;
+  console.log = (...args: unknown[]) => { logs.push(args.map(String).join(" ")); };
+  console.error = (...args: unknown[]) => { errors.push(args.map(String).join(" ")); };
+  return { logs, errors, restore: () => { console.log = origLog; console.error = origErr; } };
+}
+
 // ─── Import SUT ───────────────────────────────────────────────────────────────
 
 const { handlePaymentFlow } = await import("../payment-flow.ts");
@@ -191,7 +202,7 @@ Deno.test("handlePaymentFlow — OCR ok, monto matches: inserts pagos + transiti
     pagosInserted: [], citasUpdated: [], pendingInserted: [], convUpdated: [], waMessages: [], tgCalls: [],
   };
 
-  // Extended mock with pacientes table
+  // Extended mock with pacientes table (objetivo removed — column no longer queried)
   const supabase = {
     from: (table: string) => {
       if (table === "citas") {
@@ -211,7 +222,7 @@ Deno.test("handlePaymentFlow — OCR ok, monto matches: inserts pagos + transiti
           select: () => ({
             eq: () => ({
               single: () => Promise.resolve({
-                data: { id: "pac-2", nombre: "Ana Torres", telefono: "+593987654321", objetivo: "bajar peso" },
+                data: { id: "pac-2", nombre: "Ana Torres", telefono: "+593987654321" },
                 error: null,
               }),
             }),
@@ -295,41 +306,53 @@ Deno.test("handlePaymentFlow — OCR ok, monto matches: inserts pagos + transiti
 
   let waSent: string | null = null;
   let tgCalled = false;
+  const capture = captureLogs();
 
-  await withMockedFetch(
-    (url, init) => {
-      const u = typeof url === "string" ? url : url.toString();
-      if (u.includes("generativelanguage.googleapis.com")) {
-        return Promise.resolve(
-          new Response(
-            JSON.stringify({ candidates: [{ content: { parts: [{ text: '{"monto": 17.5, "es_comprobante": true}' }] } }] }),
-            { status: 200 },
-          ),
+  try {
+    await withMockedFetch(
+      (url, init) => {
+        const u = typeof url === "string" ? url : url.toString();
+        if (u.includes("generativelanguage.googleapis.com")) {
+          return Promise.resolve(
+            new Response(
+              JSON.stringify({ candidates: [{ content: { parts: [{ text: '{"monto": 17.5, "es_comprobante": true}' }] } }] }),
+              { status: 200 },
+            ),
+          );
+        }
+        if (u.includes("ycloud")) {
+          const reqBody = JSON.parse((init as { body?: string })?.body ?? "{}");
+          waSent = reqBody?.text?.body ?? null;
+        }
+        if (u.includes("api.telegram.org")) {
+          tgCalled = true;
+        }
+        return Promise.resolve(new Response(JSON.stringify({ ok: true, result: { message_id: 1 } }), { status: 200 }));
+      },
+      async () => {
+        const result = await handlePaymentFlow(body, supabase as unknown as SupabaseDb);
+        assertEquals(result.status, 200);
+        assertEquals(state.pagosInserted.length, 1);
+        assertEquals(state.pagosInserted[0]!.monto, 17.5);
+        assertEquals(state.pagosInserted[0]!.verificado, false);
+        assertEquals(state.citasUpdated.length, 1);
+        assertEquals(state.citasUpdated[0]!.estado, "confirmada_provisional");
+        assertEquals(state.pendingInserted.length, 1);
+        assertEquals(state.pendingInserted[0]!.action_type, "aprobar_pago");
+        assertExists(waSent); // M1 sent to patient
+        assertEquals(tgCalled, true); // Telegram notified
+        // B3: tg_notify_ok must appear, tg_notify_skipped must NOT
+        const hasNotifyOk = capture.logs.some(
+          (l) => l.includes("tg_notify_ok") || l.includes("tg_notify_fallback_ok"),
         );
-      }
-      if (u.includes("ycloud")) {
-        const reqBody = JSON.parse((init as { body?: string })?.body ?? "{}");
-        waSent = reqBody?.text?.body ?? null;
-      }
-      if (u.includes("api.telegram.org")) {
-        tgCalled = true;
-      }
-      return Promise.resolve(new Response(JSON.stringify({ ok: true, result: { message_id: 1 } }), { status: 200 }));
-    },
-    async () => {
-      const result = await handlePaymentFlow(body, supabase as unknown as SupabaseDb);
-      assertEquals(result.status, 200);
-      assertEquals(state.pagosInserted.length, 1);
-      assertEquals(state.pagosInserted[0]!.monto, 17.5);
-      assertEquals(state.pagosInserted[0]!.verificado, false);
-      assertEquals(state.citasUpdated.length, 1);
-      assertEquals(state.citasUpdated[0]!.estado, "confirmada_provisional");
-      assertEquals(state.pendingInserted.length, 1);
-      assertEquals(state.pendingInserted[0]!.action_type, "aprobar_pago");
-      assertExists(waSent); // M1 sent to patient
-      assertEquals(tgCalled, true); // Telegram notified
-    },
-  );
+        assertEquals(hasNotifyOk, true, "Expected tg_notify_ok or tg_notify_fallback_ok in logs");
+        const hasSkipped = capture.logs.some((l) => l.includes("tg_notify_skipped"));
+        assertEquals(hasSkipped, false, "tg_notify_skipped must NOT appear on happy path");
+      },
+    );
+  } finally {
+    capture.restore();
+  }
 });
 
 Deno.test("handlePaymentFlow — OCR ok, underpayment: no DB writes, sends M2", async () => {
@@ -484,6 +507,265 @@ Deno.test("handlePaymentFlow — OCR returns null: no DB writes, sends M3", asyn
     },
   );
 });
+
+// ─── B1: pacientes schema error → tg_notify_skipped reason=paciente_null ────────
+
+Deno.test("handlePaymentFlow — pacientes lookup error: logs error + emits tg_notify_skipped(paciente_null)", async () => {
+  Deno.env.set("GEMINI_API_KEY", "test-key");
+  Deno.env.set("YCLOUD_API_KEY", "test-yk");
+  Deno.env.set("YCLOUD_PHONE_NUMBER_ID", "555");
+  Deno.env.set("TELEGRAM_BOT_TOKEN", "test-tg");
+  Deno.env.set("TELEGRAM_CHAT_ID", "12345");
+
+  const supabase = {
+    from: (table: string) => {
+      if (table === "citas") {
+        const q = {
+          select: (_cols?: string) => q,
+          eq: (_c: string, _v: unknown) => q,
+          single: () => Promise.resolve({
+            data: {
+              id: "cita-b1",
+              monto_adelanto: 20,
+              estado: "pendiente_pago",
+              servicio: "alimentario_mensual",
+              fecha: "2026-06-01",
+              hora: "10:00:00",
+              paciente_id: "pac-b1",
+            },
+            error: null,
+          }),
+          update: (_vals: Record<string, unknown>) => q,
+        };
+        return q;
+      }
+      if (table === "pacientes") {
+        return {
+          select: () => ({
+            eq: () => ({
+              single: () => Promise.resolve({
+                data: null,
+                error: { code: "42703", message: "column 'objetivo' does not exist" },
+              }),
+            }),
+          }),
+        };
+      }
+      if (table === "conversaciones") {
+        return {
+          select: () => ({
+            eq: () => ({
+              eq: () => ({
+                single: () => Promise.resolve({
+                  data: { id: "conv-b1", last_message_at: new Date(Date.now() - 3600_000).toISOString() },
+                  error: null,
+                }),
+              }),
+            }),
+          }),
+          update: () => ({ eq: () => ({ eq: () => ({}) }) }),
+        };
+      }
+      if (table === "pagos") {
+        return {
+          insert: (_rows: unknown) => ({
+            select: () => ({
+              single: () => Promise.resolve({ data: { id: "pago-b1" }, error: null }),
+            }),
+          }),
+        };
+      }
+      if (table === "pending_kelly_actions") {
+        return {
+          insert: (_rows: unknown) => ({
+            select: () => ({
+              single: () => Promise.resolve({ data: { id: "pkg-b1" }, error: null }),
+            }),
+          }),
+        };
+      }
+      return { select: () => ({ eq: () => ({ single: () => Promise.resolve({ data: null, error: null }) }) }) };
+    },
+  };
+
+  const body = {
+    senderNumber: "+593999000010",
+    context: {
+      imagen_recibida: true as const,
+      image_url: "https://example.com/b1.jpg",
+      cita_id: "cita-b1",
+      wamid: "wamid-b1",
+    },
+  };
+
+  const capture = captureLogs();
+  let tgCalled = false;
+
+  try {
+    await withMockedFetch(
+      (url, _init) => {
+        const u = typeof url === "string" ? url : url.toString();
+        if (u.includes("generativelanguage.googleapis.com")) {
+          return Promise.resolve(
+            new Response(
+              JSON.stringify({ candidates: [{ content: { parts: [{ text: '{"monto": 20, "es_comprobante": true}' }] } }] }),
+              { status: 200 },
+            ),
+          );
+        }
+        if (u.includes("api.telegram.org")) {
+          tgCalled = true;
+        }
+        return Promise.resolve(new Response(JSON.stringify({ ok: true }), { status: 200 }));
+      },
+      async () => {
+        const result = await handlePaymentFlow(body, supabase as unknown as SupabaseDb);
+        assertEquals(result.status, 200);
+        // B1.1: console.error should fire for pacientes lookup failure
+        const pacErrorLog = capture.errors.some((e) => e.includes("pacientes lookup failed"));
+        assertEquals(pacErrorLog, true, "Expected a console.error mentioning 'pacientes lookup failed'");
+        // B1.2: tg_notify_skipped with reason=paciente_null must appear in logs
+        const skipLog = capture.logs.some(
+          (l) => l.includes("tg_notify_skipped") && l.includes("paciente_null"),
+        );
+        assertEquals(skipLog, true, "Expected tg_notify_skipped with reason=paciente_null in logs");
+        // B1.3: Telegram must NOT be called
+        assertEquals(tgCalled, false, "Expected Telegram NOT to be called when paciente is null");
+      },
+    );
+  } finally {
+    capture.restore();
+  }
+});
+
+// ─── B2: conv null (no error) → tg_notify_skipped reason=conv_null ──────────────
+
+Deno.test("handlePaymentFlow — conversaciones returns null (no error): emits tg_notify_skipped(conv_null)", async () => {
+  Deno.env.set("GEMINI_API_KEY", "test-key");
+  Deno.env.set("YCLOUD_API_KEY", "test-yk");
+  Deno.env.set("YCLOUD_PHONE_NUMBER_ID", "555");
+  Deno.env.set("TELEGRAM_BOT_TOKEN", "test-tg");
+  Deno.env.set("TELEGRAM_CHAT_ID", "12345");
+
+  const supabase = {
+    from: (table: string) => {
+      if (table === "citas") {
+        const q = {
+          select: (_cols?: string) => q,
+          eq: (_c: string, _v: unknown) => q,
+          single: () => Promise.resolve({
+            data: {
+              id: "cita-b2",
+              monto_adelanto: 20,
+              estado: "pendiente_pago",
+              servicio: "alimentario_mensual",
+              fecha: "2026-06-01",
+              hora: "10:00:00",
+              paciente_id: "pac-b2",
+            },
+            error: null,
+          }),
+          update: (_vals: Record<string, unknown>) => q,
+        };
+        return q;
+      }
+      if (table === "pacientes") {
+        return {
+          select: () => ({
+            eq: () => ({
+              single: () => Promise.resolve({
+                data: { id: "pac-b2", nombre: "María López", telefono: "+593912345678" },
+                error: null,
+              }),
+            }),
+          }),
+        };
+      }
+      if (table === "conversaciones") {
+        return {
+          select: () => ({
+            eq: () => ({
+              eq: () => ({
+                single: () => Promise.resolve({ data: null, error: null }),
+              }),
+            }),
+          }),
+          update: () => ({ eq: () => ({ eq: () => ({}) }) }),
+        };
+      }
+      if (table === "pagos") {
+        return {
+          insert: (_rows: unknown) => ({
+            select: () => ({
+              single: () => Promise.resolve({ data: { id: "pago-b2" }, error: null }),
+            }),
+          }),
+        };
+      }
+      if (table === "pending_kelly_actions") {
+        return {
+          insert: (_rows: unknown) => ({
+            select: () => ({
+              single: () => Promise.resolve({ data: { id: "pkg-b2" }, error: null }),
+            }),
+          }),
+        };
+      }
+      return { select: () => ({ eq: () => ({ single: () => Promise.resolve({ data: null, error: null }) }) }) };
+    },
+  };
+
+  const body = {
+    senderNumber: "+593999000011",
+    context: {
+      imagen_recibida: true as const,
+      image_url: "https://example.com/b2.jpg",
+      cita_id: "cita-b2",
+      wamid: "wamid-b2",
+    },
+  };
+
+  const capture = captureLogs();
+  let tgCalled = false;
+
+  try {
+    await withMockedFetch(
+      (url, _init) => {
+        const u = typeof url === "string" ? url : url.toString();
+        if (u.includes("generativelanguage.googleapis.com")) {
+          return Promise.resolve(
+            new Response(
+              JSON.stringify({ candidates: [{ content: { parts: [{ text: '{"monto": 20, "es_comprobante": true}' }] } }] }),
+              { status: 200 },
+            ),
+          );
+        }
+        if (u.includes("api.telegram.org")) {
+          tgCalled = true;
+        }
+        return Promise.resolve(new Response(JSON.stringify({ ok: true }), { status: 200 }));
+      },
+      async () => {
+        const result = await handlePaymentFlow(body, supabase as unknown as SupabaseDb);
+        assertEquals(result.status, 200);
+        // B2.1: tg_notify_skipped with reason=conv_null must appear in logs
+        const skipLog = capture.logs.some(
+          (l) => l.includes("tg_notify_skipped") && l.includes("conv_null"),
+        );
+        assertEquals(skipLog, true, "Expected tg_notify_skipped with reason=conv_null in logs");
+        // B2.2: no console.error for conversaciones (error was null)
+        const convErrorLog = capture.errors.some((e) => e.includes("conversaciones lookup failed"));
+        assertEquals(convErrorLog, false, "Should NOT log conversaciones error when error is null");
+        // B2.3: Telegram must NOT be called
+        assertEquals(tgCalled, false, "Expected Telegram NOT to be called when conv is null");
+      },
+    );
+  } finally {
+    capture.restore();
+  }
+});
+
+// ─── Existing tests (unchanged) ───────────────────────────────────────────────
 
 Deno.test("handlePaymentFlow — already confirmada_provisional: skips OCR, sends M7", async () => {
   Deno.env.set("GEMINI_API_KEY", "test-key");
