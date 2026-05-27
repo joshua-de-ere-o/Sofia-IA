@@ -9,7 +9,8 @@ import { logPaymentEvent } from "./log.ts";
  * Implementación de las herramientas para el Agent Loop de Sofía.
  */
 
-const ZONAS_VALIDAS = ["sur", "norte", "virtual", "valle", "domicilio"];
+// Derived from lib/catalog/zonas.json — must stay in sync (T-05 parity test enforces this).
+const ZONAS_VALIDAS = ["sur", "norte", "virtual", "valle", "domicilio", "santo_domingo"];
 
 /**
  * Calcula precio y adelanto de forma 100% determinística (sin red, sin auth).

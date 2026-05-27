@@ -12,7 +12,7 @@ export type ServicioCategoria =
   | 'taller' | 'derivacion' | 'complementario';
 
 export type ServicioModalidad = 'presencial' | 'virtual';
-export type ServicioZona = 'sur' | 'norte' | 'valle' | 'domicilio' | 'virtual';
+export type ServicioZona = 'sur' | 'norte' | 'valle' | 'domicilio' | 'virtual' | 'santo_domingo';
 
 export type Servicio = {
   id: string;
@@ -403,6 +403,7 @@ Regla general: ninguna consulta de nutrición se vende independiente — siempre
 - Virtual: 50% del plan elegido.
 - Valle (Los Chillos): 50% de (plan + $5 extra zona).
 - Domicilio: 50% de $40 fijo = $20 siempre.
+- Santo Domingo (\`santo_domingo\`): zona presencial con el mismo precio que Norte/Sur de Quito. La disponibilidad varía por día — la herramienta \`consultar_disponibilidad\` refleja los días con atención en Santo Domingo en tiempo real. No asumas disponibilidad fija: consultá siempre la herramienta antes de ofrecer horarios.
 
 ## HORARIOS DE ATENCIÓN
 - Lunes a Viernes: 08:00–12:00 y 15:00–17:00
@@ -536,7 +537,7 @@ export const TOOLS = [
         },
         zona: {
           type: "string",
-          enum: ["sur", "norte", "virtual", "valle", "domicilio"],
+          enum: ["sur", "norte", "virtual", "valle", "domicilio", "santo_domingo"],
           description: "Zona del paciente. Obligatoria: debe recolectarse antes de consultar disponibilidad.",
         },
       },
@@ -557,7 +558,7 @@ export const TOOLS = [
         },
         zona: {
           type: "string",
-          enum: ["sur", "norte", "virtual", "valle", "domicilio"],
+          enum: ["sur", "norte", "virtual", "valle", "domicilio", "santo_domingo"],
           description: "Zona geográfica del paciente.",
         },
       },
@@ -578,7 +579,7 @@ export const TOOLS = [
         fecha: { type: "string", description: "Fecha de la cita (YYYY-MM-DD)." },
         hora: { type: "string", description: "Hora de la cita (HH:MM)." },
         modalidad: { type: "string", enum: ["presencial", "virtual"], description: "Modalidad." },
-        zona: { type: "string", enum: ["sur", "norte", "virtual", "valle", "domicilio"], description: "Zona." },
+        zona: { type: "string", enum: ["sur", "norte", "virtual", "valle", "domicilio", "santo_domingo"], description: "Zona." },
         motivo: { type: "string", description: "Motivo o necesidad del paciente." },
         monto_adelanto: { type: "number", description: "Monto del adelanto calculado por el sistema según plan y zona del paciente. Obtenlo de calcular_precio antes de agendar." },
         precio_total: { type: "number", description: "Precio total del servicio (sin descontar adelanto). Obtenlo de calcular_precio antes de agendar — campo precio_total de su respuesta." },

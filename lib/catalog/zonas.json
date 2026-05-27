@@ -1,0 +1,44 @@
+[
+  {
+    "id": "sur",
+    "label": "Sur de Quito",
+    "tier": "presencial",
+    "surcharge": 0,
+    "requires_advance": false
+  },
+  {
+    "id": "norte",
+    "label": "Norte de Quito",
+    "tier": "presencial",
+    "surcharge": 0,
+    "requires_advance": true
+  },
+  {
+    "id": "valle",
+    "label": "Valle (Los Chillos)",
+    "tier": "presencial",
+    "surcharge": 5,
+    "requires_advance": true
+  },
+  {
+    "id": "domicilio",
+    "label": "Domicilio",
+    "tier": "domicilio",
+    "surcharge": 0,
+    "requires_advance": true
+  },
+  {
+    "id": "virtual",
+    "label": "Consulta Virtual",
+    "tier": "virtual",
+    "surcharge": 0,
+    "requires_advance": true
+  },
+  {
+    "id": "santo_domingo",
+    "label": "Santo Domingo",
+    "tier": "presencial",
+    "surcharge": 0,
+    "requires_advance": true
+  }
+]
