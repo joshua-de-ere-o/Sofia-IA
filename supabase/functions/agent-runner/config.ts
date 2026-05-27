@@ -340,7 +340,7 @@ export const TOOLS = [
   {
     name: "consultar_disponibilidad",
     description:
-      "Consulta los slots de agenda disponibles para agendar una cita con la Dra. Kely León. Retorna un objeto cuyas claves son fechas (YYYY-MM-DD) y cuyo valor es { dia_semana, horarios }. El campo dia_semana ya viene calculado por el servidor (ej: 'viernes'); USALO TAL CUAL al hablar con el paciente. NUNCA calcules ni adivines el día de la semana a partir de la fecha: usá siempre el dia_semana que devuelve esta función.",
+      "Consulta los slots de agenda disponibles para agendar una cita con la Dra. Kely León. Retorna un objeto cuyas claves son fechas (YYYY-MM-DD) y cuyo valor es { dia_semana, horarios, tag }. El campo dia_semana ya viene calculado por el servidor (ej: 'viernes'); USALO TAL CUAL al hablar con el paciente. NUNCA calcules ni adivines el día de la semana a partir de la fecha: usá siempre el dia_semana que devuelve esta función. El campo tag indica el tipo de atención del día: 'normal' (atención habitual), 'virtual_only' (ese día SOLO hay citas virtuales — no ofrezcas presencial) o 'santo_domingo' (presencial en Santo Domingo; no ofrezcas presencial en Quito ese día).",
     input_schema: {
       type: "object",
       properties: {

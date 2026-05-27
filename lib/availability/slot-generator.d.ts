@@ -5,7 +5,6 @@
  * Consumed by Deno's type checker without a build step.
  */
 
-export declare const OPENING_HOUR: string;
 export declare const BASE_MORNING_SLOTS: string[];
 export declare const BASE_AFTERNOON_SLOTS: string[];
 
