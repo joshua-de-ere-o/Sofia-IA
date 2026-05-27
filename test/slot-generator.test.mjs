@@ -27,7 +27,7 @@ import {
   buildSlots,
   BASE_MORNING_SLOTS,
   BASE_AFTERNOON_SLOTS,
-} from '../lib/slot-generator.js'
+} from '../lib/availability/slot-generator.js'
 
 // ---------------------------------------------------------------------------
 // Helpers
