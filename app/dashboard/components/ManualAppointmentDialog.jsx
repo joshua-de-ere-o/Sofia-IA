@@ -97,13 +97,13 @@ export function ManualAppointmentDialog({ open, onOpenChange, onSubmit, loading,
 
   return (
     <Dialog open={open} onOpenChange={handleDialogOpenChange}>
-      <DialogContent className="sm:max-w-2xl">
-        <DialogHeader>
+      <DialogContent className="flex max-h-[95vh] flex-col gap-0 overflow-hidden p-0 sm:max-h-[85vh] sm:max-w-2xl">
+        <DialogHeader className="shrink-0 border-b px-6 pb-4 pt-6">
           <DialogTitle>Agendar cita manual</DialogTitle>
           <DialogDescription>Creá una cita desde el CRM sin pasar por el flujo automático de Sofía.</DialogDescription>
         </DialogHeader>
 
-        <div className="grid gap-4 py-2">
+        <div className="grid flex-1 gap-4 overflow-y-auto px-6 py-4">
           <div className="grid gap-4 sm:grid-cols-2">
             <div className="grid gap-2">
               <Label htmlFor="manual-patient-name">Nombre del paciente</Label>
@@ -171,7 +171,7 @@ export function ManualAppointmentDialog({ open, onOpenChange, onSubmit, loading,
           )}
         </div>
 
-        <DialogFooter>
+        <DialogFooter className="shrink-0 gap-2 border-t bg-background px-6 py-4 sm:gap-0">
           <Button variant="outline" onClick={resetAndClose} disabled={loading}>
             Cancelar
           </Button>
