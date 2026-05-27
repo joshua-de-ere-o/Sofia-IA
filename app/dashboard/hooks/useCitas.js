@@ -2,13 +2,42 @@
 
 import { useState, useEffect, useCallback, useMemo } from 'react'
 import { createClient } from '@/lib/supabase'
-import { actualizarEstadoCita, reagendarCita, verificarPago } from '../actions'
+import {
+  actualizarEstadoCita,
+  createManualAppointment,
+  reagendarCita,
+  verificarPago,
+} from '../actions'
+
+export async function runCreateManualAppointmentFlow({
+  payload,
+  createManualAppointmentAction,
+  fetchCitas,
+  setActionLoading,
+  setManualError,
+}) {
+  setActionLoading('manual-create')
+  setManualError('')
+
+  const result = await createManualAppointmentAction(payload)
+
+  setActionLoading(null)
+
+  if (result?.error) {
+    setManualError(result.error)
+    return { error: result.error }
+  }
+
+  await fetchCitas()
+  return { success: true, date: payload.date }
+}
 
 export function useCitas() {
   const supabase = useMemo(() => createClient(), [])
   const [citas, setCitas] = useState([])
   const [loading, setLoading] = useState(true)
   const [actionLoading, setActionLoading] = useState(null)
+  const [manualError, setManualError] = useState('')
 
   const fetchCitas = useCallback(async () => {
     const { data } = await supabase
@@ -61,6 +90,20 @@ export function useCitas() {
     return { success: true }
   }, [fetchCitas])
 
+  const handleCreateManual = useCallback(async (payload) => {
+    return runCreateManualAppointmentFlow({
+      payload,
+      createManualAppointmentAction: createManualAppointment,
+      fetchCitas,
+      setActionLoading,
+      setManualError,
+    })
+  }, [fetchCitas])
+
+  const clearManualError = useCallback(() => {
+    setManualError('')
+  }, [])
+
   const openVoucher = useCallback(async (pago) => {
     const path = pago?.referencia
     if (!path) {
@@ -83,9 +126,12 @@ export function useCitas() {
     citas,
     loading,
     actionLoading,
+    manualError,
+    clearManualError,
     handleEstado,
     handleVerificarPago,
     handleReagendar,
+    handleCreateManual,
     openVoucher,
   }
 }
