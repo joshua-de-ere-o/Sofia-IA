@@ -42,18 +42,22 @@ function DialogContent({ children, className, ...props }) {
   if (!open) return null
 
   return (
-    <div className="fixed inset-0 z-50">
+    <div className="fixed inset-0 z-50 flex items-end justify-center sm:items-center sm:p-4">
       <div className="fixed inset-0 bg-black/50" onClick={() => onOpenChange(false)} />
-      <div className="fixed left-1/2 top-1/2 z-50 -translate-x-1/2 -translate-y-1/2">
-        <div className={cn("w-full max-w-lg rounded-lg border bg-background p-6 shadow-lg", className)} {...props}>
-          {children}
-          <button
-            onClick={() => onOpenChange(false)}
-            className="absolute right-4 top-4 rounded-sm opacity-70 transition-opacity hover:opacity-100"
-          >
-            <X className="h-4 w-4" />
-          </button>
-        </div>
+      <div
+        className={cn(
+          "relative z-50 flex max-h-[95vh] w-full max-w-lg flex-col overflow-hidden rounded-t-lg border bg-background p-6 shadow-lg sm:max-h-[85vh] sm:rounded-lg",
+          className,
+        )}
+        {...props}
+      >
+        {children}
+        <button
+          onClick={() => onOpenChange(false)}
+          className="absolute right-4 top-4 z-10 rounded-sm opacity-70 transition-opacity hover:opacity-100"
+        >
+          <X className="h-4 w-4" />
+        </button>
       </div>
     </div>
   )
