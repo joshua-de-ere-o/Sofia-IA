@@ -2,6 +2,7 @@ import { createClient } from "jsr:@supabase/supabase-js";
 import { getServicio, SERVICIO_IDS_TODOS, DERIVACION_TEMPLATES } from "./config.ts";
 import { normalizeAmount, amountMatches } from "./amount.ts";
 import { logPaymentEvent } from "./log.ts";
+import { generateAvailability } from "../../../lib/availability/slot-generator.js";
 
 /**
  * supabase/functions/agent-runner/tools.ts
@@ -84,10 +85,10 @@ function getSupabase() {
 
 /**
  * Consulta la disponibilidad de agenda en Supabase.
- * Retorna las fechas y horas libres excluyendo domingos, feriados (tarde) y slots ocupados.
+ * Retorna las fechas y horas libres excluyendo domingos, feriados y slots ocupados.
  *
  * T-20: 3-way Promise.all for feriados + excepciones_horario + citas (R-AV-04, SC-11).
- * T-21: Per-day override logic via computeDaySlots from lib/slot-generator.js (R-AV-01–06).
+ * Slot generation delegated to generateAvailability (lib/availability/slot-generator.js).
  */
 export async function executeConsultarDisponibilidad(args: any): Promise<string> {
   const { fecha_inicio, fecha_fin } = args;
@@ -138,155 +139,20 @@ export async function executeConsultarDisponibilidad(args: any): Promise<string>
       occupiedSet.add(`${cita.fecha}_${timeStr}`);
     });
 
-    // T-21: Per-day slot generation with excepcion overrides.
-    // Day names indexed by getDay() (0=Sunday) — keeps name in sync with slot logic.
-    const DIAS_SEMANA = ["domingo", "lunes", "martes", "miércoles", "jueves", "viernes", "sábado"];
-
-    // Today in Ecuador time — used to filter past slots on the current day.
-    const nowLocalStr = new Date().toLocaleString("en-US", { timeZone: "America/Guayaquil" });
-    const localNow = new Date(nowLocalStr);
-    const todayStr =
-      localNow.getFullYear() +
-      "-" + String(localNow.getMonth() + 1).padStart(2, '0') +
-      "-" + String(localNow.getDate()).padStart(2, '0');
-    const currentHourStr =
-      String(localNow.getHours()).padStart(2, '0') +
-      ":" + String(localNow.getMinutes()).padStart(2, '0');
-
-    const startObj = new Date(fecha_inicio + "T00:00:00");
-    const endObj = new Date(fecha_fin + "T00:00:00");
-    let current = new Date(startObj);
-
-    type DayEntry = { dia_semana: string; horarios: string[]; tag?: string };
-    let slotsLibres: Record<string, DayEntry> = {};
-    let dayCount = 0;
-
-    while (current <= endObj && dayCount <= 14) {
-      const dateStr =
-        current.getFullYear() +
-        "-" + String(current.getMonth() + 1).padStart(2, '0') +
-        "-" + String(current.getDate()).padStart(2, '0');
-      const dayOfWeek = current.getDay(); // 0 = Sunday
-
-      if (dayOfWeek !== 0) {
-        const isFeriado = feriadoSet.has(dateStr);
-
-        // T-21: Apply excepcion override logic (ADR-4, R-AV-01, R-AV-02).
-        // Feriado precedence is enforced inside computeDaySlots (R-AV-02 / SC-06).
-        const excepcion = excepcionesMap.get(dateStr) ?? null;
-        const { slots: allowedSlots, tag } = _computeDaySlots({ dayOfWeek, isFeriado, excepcion });
-
-        const validSlots = allowedSlots.filter((timeSlot: string) => {
-          // Skip past slots on today (Ecuador local time).
-          if (dateStr === todayStr && timeSlot <= currentHourStr) {
-            return false;
-          }
-          // Skip occupied slots (R-AV-03 / SC-07).
-          return !occupiedSet.has(`${dateStr}_${timeSlot}`);
-        });
-
-        if (validSlots.length > 0) {
-          const entry: DayEntry = { dia_semana: DIAS_SEMANA[dayOfWeek], horarios: validSlots };
-          // Propagate tag so LLM / callers can filter by modalidad if needed.
-          // tag='normal'        → all zones available per base schedule
-          // tag='virtual_only'  → solo_virtual day: caller must suppress presencial (SC-10)
-          // tag='santo_domingo' → SD presencial + virtual; caller must suppress Quito presencial (SC-01/05)
-          if (tag !== 'normal') entry.tag = tag;
-          slotsLibres[dateStr] = entry;
-        }
-      }
-
-      current.setDate(current.getDate() + 1);
-      dayCount++;
-    }
+    const slotsLibres = generateAvailability({
+      fechaInicio: fecha_inicio,
+      fechaFin: fecha_fin,
+      feriadosSet: feriadoSet,
+      excepcionesMap,
+      occupiedSet,
+      timeZone: "America/Guayaquil",
+    });
 
     return JSON.stringify(slotsLibres);
   } catch (err: any) {
     console.error("Error executing consultar_disponibilidad:", err);
     return JSON.stringify({ error: `Hubo un error al consultar disponibilidad: ${err.message}` });
   }
-}
-
-// ---------------------------------------------------------------------------
-// T-21: Inline slot logic (mirrors lib/slot-generator.js for Deno compat).
-//
-// lib/slot-generator.js is Node-only (Vitest tests import it directly).
-// Deno Edge can import Node ESM in theory, but to avoid any bundler/import
-// resolution issues at deploy time, the pure functions are inlined here.
-// Any logic change MUST be kept in sync with lib/slot-generator.js.
-// ---------------------------------------------------------------------------
-
-const _BASE_MORNING_SLOTS = [
-  "08:00", "08:30", "09:00", "09:30", "10:00", "10:30", "11:00", "11:30",
-];
-const _BASE_AFTERNOON_SLOTS = ["15:00", "15:30", "16:00", "16:30"];
-
-/** Build 30-min slots from startTime (inclusive) to endTime (exclusive/last = endTime-30m). */
-function _buildSlots(startTime: string, endTime: string): string[] {
-  const [sh, sm] = startTime.split(':').map(Number);
-  const [eh, em] = endTime.split(':').map(Number);
-  const startMin = sh * 60 + sm;
-  const endMin = eh * 60 + em;
-  const slots: string[] = [];
-  for (let t = startMin; t < endMin; t += 30) {
-    const hh = String(Math.floor(t / 60)).padStart(2, '0');
-    const mm = String(t % 60).padStart(2, '0');
-    slots.push(`${hh}:${mm}`);
-  }
-  return slots;
-}
-
-/**
- * Compute allowed slots for one calendar day.
- *
- * Precedence (R-AV-02 / SC-06): feriado → zero slots (ignores excepcion).
- * Override table (ADR-1, ADR-4):
- *   quito_extendido  → morning + extended afternoon (15:00 to hora_fin)
- *   solo_virtual     → morning + base afternoon; tag = virtual_only
- *   santo_domingo    → morning + SD afternoon (15:00 to hora_fin); tag = santo_domingo
- */
-function _computeDaySlots({
-  dayOfWeek,
-  isFeriado,
-  excepcion,
-}: {
-  dayOfWeek: number;
-  isFeriado: boolean;
-  excepcion: any | null;
-}): { slots: string[]; tag: 'normal' | 'virtual_only' | 'santo_domingo' } {
-  if (dayOfWeek === 0) return { slots: [], tag: 'normal' };
-
-  // Feriado beats every excepcion (R-AV-02 / SC-06): zero slots on feriado.
-  if (isFeriado) return { slots: [], tag: 'normal' };
-
-  if (excepcion) {
-    const { ubicacion, hora_fin } = excepcion;
-
-    if (ubicacion === 'quito_extendido') {
-      return {
-        slots: [..._BASE_MORNING_SLOTS, ..._buildSlots('15:00', hora_fin)],
-        tag: 'normal',
-      };
-    }
-
-    if (ubicacion === 'solo_virtual') {
-      return {
-        slots: [..._BASE_MORNING_SLOTS, ..._buildSlots('15:00', hora_fin)],
-        tag: 'virtual_only',
-      };
-    }
-
-    if (ubicacion === 'santo_domingo') {
-      return {
-        slots: [..._BASE_MORNING_SLOTS, ..._buildSlots('15:00', hora_fin)],
-        tag: 'santo_domingo',
-      };
-    }
-  }
-
-  // Base schedule
-  if (dayOfWeek === 6) return { slots: [..._BASE_MORNING_SLOTS], tag: 'normal' }; // Saturday
-  return { slots: [..._BASE_MORNING_SLOTS, ..._BASE_AFTERNOON_SLOTS], tag: 'normal' }; // Mon–Fri
 }
 
 /**
