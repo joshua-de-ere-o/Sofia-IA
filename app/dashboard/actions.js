@@ -1,6 +1,12 @@
 'use server'
 
 import { createServerSupabaseClient } from '@/lib/supabase-server'
+import {
+  validateExcepcionInput,
+  expandDateRange,
+  detectConflicts,
+  detectOverlaps,
+} from '@/lib/excepciones-logic'
 
 /**
  * Obtener la configuración general del sistema
@@ -433,6 +439,145 @@ export async function getFinanzasMetrics(periodo = 'mes') {
     pendiente: { total: pendienteTotal, cantidad: pendienteItems.length, items: pendienteItems },
     comparacion: { cobradoPrev, deltaPct },
   }
+}
+
+// ---------------------------------------------------------------------------
+// Excepciones de horario (T-30)
+// ---------------------------------------------------------------------------
+
+/**
+ * List upcoming exceptions (today and forward, next 90 days).
+ *
+ * @returns {{ excepciones: Array } | { error: string }}
+ */
+export async function listarExcepcionesProximas() {
+  const supabase = await createServerSupabaseClient()
+
+  const today = new Date().toISOString().split('T')[0]
+  const until = new Date(Date.now() + 90 * 24 * 60 * 60 * 1000).toISOString().split('T')[0]
+
+  const { data, error } = await supabase
+    .from('excepciones_horario')
+    .select('id, fecha, ubicacion, hora_fin, motivo, created_at, created_by')
+    .gte('fecha', today)
+    .lte('fecha', until)
+    .order('fecha', { ascending: true })
+
+  if (error) return { error: error.message }
+  return { excepciones: data || [] }
+}
+
+/**
+ * Create one or more exceptions for a date range (all-or-nothing per ADR-3).
+ *
+ * @param {{ fecha_inicio: string, fecha_fin: string, ubicacion: string, hora_fin: string, motivo?: string }} input
+ * @returns {
+ *   { status: 'ok', ids: string[] } |
+ *   { status: 'conflict', conflicts: import('@/lib/excepciones-logic').ConflictRow[] } |
+ *   { status: 'overlap', dates: string[] } |
+ *   { status: 'error', message: string }
+ * }
+ */
+export async function crearExcepcionHorario({ fecha_inicio, fecha_fin, ubicacion, hora_fin, motivo }) {
+  // 1. Validate inputs
+  const validation = validateExcepcionInput({ fecha_inicio, fecha_fin, ubicacion, hora_fin })
+  if (!validation.ok) return { status: 'error', message: validation.message }
+
+  // 2. Expand date range
+  const dates = expandDateRange(fecha_inicio, fecha_fin)
+  if (dates.length === 0) return { status: 'error', message: 'El rango de fechas no es válido.' }
+
+  const supabase = await createServerSupabaseClient()
+
+  // 3. Get authenticated user (for created_by)
+  const { data: { user } } = await supabase.auth.getUser()
+
+  // 4. Conflict check — query all presencial citas in the range (ADR-2)
+  // Only check when exception type removes presencial Quito slots
+  if (ubicacion !== 'quito_extendido') {
+    const { data: citasRows, error: errCitas } = await supabase
+      .from('citas')
+      .select(`
+        id,
+        fecha,
+        hora_inicio:hora,
+        modalidad,
+        zona,
+        paciente:pacientes(nombre, telefono)
+      `)
+      .in('fecha', dates)
+      .in('estado', ['pendiente_pago', 'confirmada'])
+      .neq('modalidad', 'virtual')
+
+    if (errCitas) return { status: 'error', message: errCitas.message }
+
+    // Flatten to ConflictRow shape expected by detectConflicts
+    const flatCitas = (citasRows || []).map((c) => ({
+      cita_id: c.id,
+      fecha: c.fecha,
+      hora_inicio: c.hora_inicio,
+      modalidad: c.modalidad,
+      zona: c.zona,
+      paciente_nombre: c.paciente?.nombre || 'Sin nombre',
+      paciente_telefono: c.paciente?.telefono || '',
+    }))
+
+    const conflicts = detectConflicts(flatCitas, ubicacion)
+    if (conflicts.length > 0) {
+      return { status: 'conflict', conflicts }
+    }
+  }
+
+  // 5. Overlap check — query existing excepciones for the same dates (ADR-3)
+  const { data: existingExc, error: errExc } = await supabase
+    .from('excepciones_horario')
+    .select('id, fecha')
+    .in('fecha', dates)
+
+  if (errExc) return { status: 'error', message: errExc.message }
+
+  const overlaps = detectOverlaps(dates, existingExc || [])
+  if (overlaps.length > 0) {
+    return { status: 'overlap', dates: overlaps }
+  }
+
+  // 6. Insert all rows — single statement, atomic (ADR-3)
+  const rows = dates.map((fecha) => ({
+    fecha,
+    ubicacion,
+    hora_fin,
+    motivo: motivo || null,
+    created_by: user?.id || null,
+  }))
+
+  const { data: inserted, error: errInsert } = await supabase
+    .from('excepciones_horario')
+    .insert(rows)
+    .select('id')
+
+  if (errInsert) return { status: 'error', message: errInsert.message }
+
+  return { status: 'ok', ids: (inserted || []).map((r) => r.id) }
+}
+
+/**
+ * Delete an exception by ID (immediate, no soft-delete per R-UI-07).
+ *
+ * @param {string} id  UUID of the excepcion row
+ * @returns {{ success: true } | { error: string }}
+ */
+export async function eliminarExcepcionHorario(id) {
+  if (!id) return { error: 'ID de excepción requerido.' }
+
+  const supabase = await createServerSupabaseClient()
+
+  const { error } = await supabase
+    .from('excepciones_horario')
+    .delete()
+    .eq('id', id)
+
+  if (error) return { error: error.message }
+  return { success: true }
 }
 
 /**
