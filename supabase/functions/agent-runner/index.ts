@@ -12,6 +12,11 @@ import {
   executeCancelarCita,
   executeReprogramarCita,
   executeConfirmarMontoComprobante,
+  // Patient data-update tools (PR 2)
+  executeIniciarActualizacionDatos,
+  executeParseAppointmentDate,
+  executeVerificarDatosPaciente,
+  executeConfirmarActualizacionDatos,
 } from "./tools.ts";
 import { handlePaymentFlow } from "./payment-flow.ts";
 
@@ -19,6 +24,9 @@ const corsHeaders = {
   'Access-Control-Allow-Origin': '*',
   'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type',
 };
+
+// Regex for deterministic keyword detection (pre-LLM hook — PR 2)
+const RECORDATORIOS_REGEX = /\brecordatorios\b/i;
 
 // Diccionario de ejecutores
 const toolExecutors: Record<string, (args: any, ctx: any) => Promise<string>> = {
@@ -29,6 +37,11 @@ const toolExecutors: Record<string, (args: any, ctx: any) => Promise<string>> = 
   cancelar_cita: executeCancelarCita,
   reprogramar_cita: executeReprogramarCita,
   confirmar_monto_comprobante: executeConfirmarMontoComprobante,
+  // Patient data-update tools (PR 2)
+  iniciar_actualizacion_datos: executeIniciarActualizacionDatos,
+  parse_appointment_date: executeParseAppointmentDate,
+  verificar_datos_paciente: executeVerificarDatosPaciente,
+  confirmar_actualizacion_datos: executeConfirmarActualizacionDatos,
 };
 
 /**
@@ -200,6 +213,24 @@ Deno.serve(async (req: Request) => {
       conv.paciente_id = pacienteExistente.id;
     }
 
+    // ── Recordatorios keyword hook: deterministic pre-LLM intercept ─────────
+    // Placed AFTER paciente lookup so we know whether the sender is a known patient.
+    // When matched, we inject a synthetic forced tool call into the history BEFORE
+    // entering the agentic loop — the LLM sees the tool result and continues
+    // the multi-turn collection naturally.
+    let forcedToolCall: { name: string; input: Record<string, any> } | null = null;
+    if (RECORDATORIOS_REGEX.test(text)) {
+      console.log(`[Agent-Runner] RECORDATORIOS keyword detected for ${senderNumber}`);
+      forcedToolCall = {
+        name: "iniciar_actualizacion_datos",
+        input: {
+          trigger: "regex_keyword",
+          paciente_id: pacienteExistente?.id ?? null,
+          from_number: senderNumber,
+        },
+      };
+    }
+
     // 2. Cargar historial y armar el nuevo mensaje del usuario
     let history: any[] = Array.isArray(conv.mensajes_raw) ? conv.mensajes_raw : [];
 
@@ -226,6 +257,39 @@ Deno.serve(async (req: Request) => {
 
     // 3. Preparar el Adaptador de Modelo (lee directamente de Deno.env)
     const adapter = await getModelAdapter();
+
+    // ── Inject forced tool call for RECORDATORIOS keyword ─────────────────
+    // If the regex hook fired, we execute iniciar_actualizacion_datos directly,
+    // inject a synthetic assistant tool_use + tool_result pair into history,
+    // and then enter the agentic loop. The LLM sees the tool result as if it
+    // had decided to call the tool itself, then continues the conversation.
+    if (forcedToolCall) {
+      const syntheticId = `forced_${Date.now()}`;
+      const ctx = {
+        senderNumber,
+        conversacion_id: conv.id,
+        paciente_id: conv.paciente_id,
+      };
+      const toolResultStr = await toolExecutors[forcedToolCall.name](forcedToolCall.input, ctx);
+
+      history.push({
+        role: "assistant",
+        content: "",
+        tool_calls: [{
+          id: syntheticId,
+          name: forcedToolCall.name,
+          input: forcedToolCall.input,
+        }],
+      });
+      history.push({
+        role: "tool",
+        name: forcedToolCall.name,
+        tool_call_id: syntheticId,
+        tool_use_id: syntheticId,
+        content: toolResultStr,
+      });
+      console.log(`[Agent-Runner] Forced tool ${forcedToolCall.name} injected into history.`);
+    }
 
     // 4. Iniciar el Loop Agéntico (máximo 5 iteraciones de herramientas para evitar loops infinitos)
     let agentFinished = false;

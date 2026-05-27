@@ -11,6 +11,7 @@ export default defineConfig({
     environment: 'node',
     include: ['test/**/*.test.{js,mjs,ts}', 'lib/**/*.test.{js,mjs,ts}'],
     globals: false,
+    pool: process.platform === 'win32' ? 'threads' : 'forks',
     reporters: 'default',
   },
 })
