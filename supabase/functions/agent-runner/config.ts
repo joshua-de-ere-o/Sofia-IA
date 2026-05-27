@@ -328,7 +328,37 @@ Si en tu turno anterior pediste al paciente que confirme el monto de su comproba
 ## IMPORTANTE
 - Nunca te presentes como bot, IA ni asistente virtual explícitamente.
 - Tu nombre es Sofía y trabajas con la Dra. Kely León.
-- Si no tienes certeza de algo, no inventes — pregunta o escala.`;
+- Si no tienes certeza de algo, no inventes — pregunta o escala.
+
+## ACTUALIZACIÓN DE DATOS DEL PACIENTE (recordatorios de citas)
+
+Cuando el paciente exprese intención de registrar o actualizar sus datos para recibir recordatorios de citas (ej: "recordatorios", "quiero actualizar mis datos", "cargar mi número", "dejar mi teléfono", "quiero recibir recordatorios"), debés:
+
+1. Llamar la herramienta \`iniciar_actualizacion_datos\` con trigger="llm_intent".
+2. Pedirle al paciente los 3 datos obligatorios, UNO POR UNO, en este orden:
+   - **Nombre completo** (exactamente como figura en la cédula: 2 nombres + 2 apellidos)
+   - **Fecha de nacimiento** (formato DD/MM/AAAA)
+   - **Fecha de su próxima o última cita con la Dra. Kely** (formato DD/MM/AAAA)
+3. Para CADA fecha que el paciente proporcione, SIEMPRE llamar \`parse_appointment_date\` antes de continuar. NUNCA interpretes ni adivines fechas vos misma.
+4. Si \`parse_appointment_date\` devuelve \`ok:false\`, pedí la fecha de nuevo en formato DD/MM/AAAA. Podés reintentar MÁXIMO 2 veces por dato. Si el tercer intento también falla, escalá a la Dra. Kely con \`derivar_a_kelly\` motivo='default' y terminá el flujo.
+5. Cuando tenés los 3 datos válidos, llamar \`verificar_datos_paciente\`. Según el resultado:
+   - \`match:'none'\`: pedí al paciente que revise el nombre o la fecha. Podés reintentar MÁXIMO 2 veces. Si fallan los 2 reintentos, escalá a la Dra. Kely.
+   - \`match:'multiple'\`: escalá a la Dra. Kely inmediatamente. NO ofrezcas reintentos.
+   - \`match:'unique'\`: llamar \`confirmar_actualizacion_datos\` con el modo sugerido.
+6. Según el resultado de \`confirmar_actualizacion_datos\`:
+   - \`status:'updated'\`: enviá el mensaje de cierre (en mensaje_sofia).
+   - \`status:'pending_approval'\`: enviá el mensaje intermedio al paciente (en mensaje_sofia). Dra. Kely recibirá una notificación para aprobar el cambio.
+   - \`status:'collision_detected'\`: enviá el mensaje de cierre (en mensaje_sofia).
+   - \`status:'already_up_to_date'\`: enviá el mensaje (en mensaje_sofia).
+
+**Reglas críticas:**
+- Usá SIEMPRE "Dra. Kely" (con una sola L) en cualquier mensaje al paciente.
+- NUNCA actualices datos sin pasar por la herramienta \`confirmar_actualizacion_datos\`.
+- NUNCA interpretes fechas vos misma — siempre \`parse_appointment_date\` primero.
+- Máximo 2 reintentos por campo antes de escalar.
+- El mensaje de cierre exitoso es: "¡Listo! Quedaron registrados tus datos. Desde ahora vas a recibir un recordatorio el día antes y otro un par de horas antes de cada cita con la Dra. Kely. En el mismo mensaje vas a poder confirmar, reprogramar o cancelar sin tener que escribir nada extra."
+- El mensaje de espera cuando la Dra. debe aprobar es: "Recibí tu solicitud. Está esperando confirmación de la Dra. Kely, te aviso apenas la apruebe."
+- SIEMPRE enviá el mensaje al paciente ANTES de hacer cualquier acción en Telegram (ya lo maneja el sistema internamente).`;
 
 export const MODEL_CONFIG = {
   max_tokens_normal: 800,
@@ -449,6 +479,126 @@ export const TOOLS = [
         motivo: { type: "string", description: "Motivo por el cual el paciente reprograma." }
       },
       required: ["nueva_fecha", "nueva_hora", "motivo"],
+    },
+  },
+  // ── Patient data update tools (PR 2) ──────────────────────────────────────
+  {
+    name: "iniciar_actualizacion_datos",
+    description:
+      "Inicia el flujo de actualización de datos del paciente. Llamar cuando el paciente diga " +
+      "'recordatorios', 'quiero actualizar mis datos', 'cargar mi número', 'dejar mi teléfono', " +
+      "'quiero recibir recordatorios' o equivalentes. Devuelve un mensaje guía para pedirle al " +
+      "paciente los 3 datos obligatorios.",
+    input_schema: {
+      type: "object",
+      properties: {
+        trigger: {
+          type: "string",
+          enum: ["regex_keyword", "llm_intent"],
+          description: "Cómo se detectó la intención: 'regex_keyword' si fue por la palabra clave, 'llm_intent' si el LLM la inferió.",
+        },
+        paciente_id: {
+          type: ["string", "null"],
+          description: "UUID del paciente si el sender ya está registrado en BD; null si es desconocido.",
+        },
+        from_number: {
+          type: "string",
+          description: "Número WhatsApp del sender (From field).",
+        },
+      },
+      required: ["trigger", "from_number"],
+    },
+  },
+  {
+    name: "parse_appointment_date",
+    description:
+      "Parsea una fecha en español natural (DD/MM/AAAA, DD-MM-AAAA, 'mañana', 'el lunes', " +
+      "'3 de marzo', '15 de junio de 2026', etc.) y devuelve YYYY-MM-DD. " +
+      "NUNCA interpretes fechas vos misma: si la fecha es ambigua o no reconocida, devuelve ok:false. " +
+      "Usar para AMBOS campos de fecha: fecha de nacimiento y fecha de cita.",
+    input_schema: {
+      type: "object",
+      properties: {
+        text: {
+          type: "string",
+          description: "El texto de fecha tal como lo escribió el paciente.",
+        },
+        today_iso: {
+          type: "string",
+          description: "Fecha de hoy en formato YYYY-MM-DD (usa el CONTEXTO SISTEMA inyectado al inicio del turno).",
+        },
+      },
+      required: ["text", "today_iso"],
+    },
+  },
+  {
+    name: "verificar_datos_paciente",
+    description:
+      "Verifica nombre completo + fecha de cita contra la BD usando similitud trigrama. " +
+      "Devuelve {match:'unique'|'multiple'|'none', candidates, paciente_id?, mode_suggested?}. " +
+      "NO actualiza nada — solo verifica identidad. Llamar solo después de haber parseado " +
+      "ambas fechas con parse_appointment_date.",
+    input_schema: {
+      type: "object",
+      properties: {
+        nombre_completo: {
+          type: "string",
+          description: "Nombre completo del paciente tal como lo proporcionó (2 nombres + 2 apellidos).",
+        },
+        fecha_cita: {
+          type: "string",
+          description: "Fecha de la cita en formato YYYY-MM-DD (ya parseada por parse_appointment_date).",
+        },
+        fecha_nacimiento: {
+          type: "string",
+          description: "Fecha de nacimiento en formato YYYY-MM-DD (ya parseada por parse_appointment_date).",
+        },
+        from_number: {
+          type: "string",
+          description: "Número WhatsApp del sender.",
+        },
+      },
+      required: ["nombre_completo", "fecha_cita", "fecha_nacimiento", "from_number"],
+    },
+  },
+  {
+    name: "confirmar_actualizacion_datos",
+    description:
+      "Ejecuta la actualización de datos del paciente. " +
+      "Modo 'auto_update': paciente SIN teléfono registrado → UPDATE directo + historial aprobado. " +
+      "Modo 'request_approval': paciente CON teléfono distinto → INSERT pendiente + notificación a Dra. Kely. " +
+      "Siempre hace pre-check de colisión UNIQUE antes de cualquier UPDATE. " +
+      "Devuelve mensaje_sofia con el texto exacto a enviarle al paciente.",
+    input_schema: {
+      type: "object",
+      properties: {
+        paciente_id: {
+          type: "string",
+          description: "UUID del paciente (de verificar_datos_paciente).",
+        },
+        from_number: {
+          type: "string",
+          description: "Número WhatsApp del sender — se usará como el nuevo teléfono.",
+        },
+        telefono_nuevo: {
+          type: "string",
+          description: "Mismo valor que from_number (el teléfono nuevo a registrar).",
+        },
+        fecha_nacimiento: {
+          type: "string",
+          description: "Fecha de nacimiento en formato YYYY-MM-DD (ya parseada).",
+        },
+        mode: {
+          type: "string",
+          enum: ["auto_update", "request_approval"],
+          description: "Modo determinado por verificar_datos_paciente (mode_suggested).",
+        },
+        existing_telefono: {
+          type: ["string", "null"],
+          description: "Teléfono actual del paciente en BD (null si no tenía). De verificar_datos_paciente.",
+        },
+      },
+      required: ["paciente_id", "from_number", "telefono_nuevo", "mode"],
     },
   },
   {

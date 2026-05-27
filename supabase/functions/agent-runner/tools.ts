@@ -3,6 +3,11 @@ import { getServicio, SERVICIO_IDS_TODOS, DERIVACION_TEMPLATES } from "./config.
 import { normalizeAmount, amountMatches } from "./amount.ts";
 import { logPaymentEvent } from "./log.ts";
 import { generateAvailability } from "../../../lib/availability/slot-generator.js";
+// Patient data-update tools (PR 2) — pure logic lives in lib/ for Vitest testability
+import { parseSpanishDate } from "../../../lib/parse-spanish-date.js";
+import { verificarDatosPaciente } from "../../../lib/verificar-datos-paciente.js";
+import { confirmarActualizacionDatos as _confirmarActualizacionDatos } from "../../../lib/confirmar-actualizacion-datos.js";
+import { iniciarActualizacionDatos as _iniciarActualizacionDatos } from "../../../lib/iniciar-actualizacion-datos.js";
 
 /**
  * supabase/functions/agent-runner/tools.ts
@@ -651,5 +656,78 @@ export async function executeConfirmarMontoComprobante(
   } catch (err: any) {
     logPaymentEvent("text_fallback_error", { reason: err?.message });
     return JSON.stringify({ error: `Error al confirmar monto: ${err?.message}` });
+  }
+}
+
+// ── Patient data-update executors (PR 2) ────────────────────────────────────
+
+/**
+ * iniciar_actualizacion_datos — kicks off the 3-data collection flow.
+ * Pure function: no DB writes, no external calls.
+ */
+export async function executeIniciarActualizacionDatos(args: any, _ctx: any): Promise<string> {
+  try {
+    const result = _iniciarActualizacionDatos(args);
+    return JSON.stringify(result);
+  } catch (err: any) {
+    return JSON.stringify({ ok: false, reason: err?.message ?? "error_inesperado" });
+  }
+}
+
+/**
+ * parse_appointment_date — deterministic Spanish date parser.
+ * Pure function: no DB, no network.
+ */
+export async function executeParseAppointmentDate(args: any, _ctx: any): Promise<string> {
+  try {
+    const { text, today_iso } = args;
+    if (!text || !today_iso) {
+      return JSON.stringify({ ok: false, reason: "faltan_parametros" });
+    }
+    const result = parseSpanishDate(String(text), String(today_iso));
+    return JSON.stringify(result);
+  } catch (err: any) {
+    return JSON.stringify({ ok: false, reason: err?.message ?? "error_parser" });
+  }
+}
+
+/**
+ * verificar_datos_paciente — calls verificar_paciente_match RPC and applies
+ * match/mode decision logic.
+ */
+export async function executeVerificarDatosPaciente(args: any, _ctx: any): Promise<string> {
+  try {
+    const supabaseUrl = Deno.env.get("SUPABASE_URL") ?? "";
+    const supabaseKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") ?? "";
+    const supabase = createClient(supabaseUrl, supabaseKey);
+
+    const result = await verificarDatosPaciente(args, supabase);
+    return JSON.stringify(result);
+  } catch (err: any) {
+    return JSON.stringify({ match: "error", reason: err?.message ?? "error_inesperado" });
+  }
+}
+
+/**
+ * confirmar_actualizacion_datos — executes the appropriate update path.
+ * Implements UNIQUE collision pre-check (resolution #231), auto_update,
+ * and request_approval paths.
+ *
+ * When escalation_required=true, the result signals PR 3 (Telegram route)
+ * to send the notification to Dra. Kely.
+ *
+ * TODO(PR3): After this tool returns escalation_required=true, the agent-runner
+ * should call a Telegram helper to notify Dra. Kely with inline keyboard
+ * datos_confirm_<historial_id> / datos_reject_<historial_id>.
+ */
+export async function executeConfirmarActualizacionDatos(args: any, _ctx: any): Promise<string> {
+  try {
+    const supabaseUrl = Deno.env.get("SUPABASE_URL") ?? "";
+    const supabaseKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") ?? "";
+    const supabase = createClient(supabaseUrl, supabaseKey);
+
+    return await _confirmarActualizacionDatos(args, supabase);
+  } catch (err: any) {
+    return JSON.stringify({ status: "error", reason: err?.message ?? "error_inesperado" });
   }
 }
