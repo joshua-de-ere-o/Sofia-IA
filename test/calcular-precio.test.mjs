@@ -88,4 +88,18 @@ describe('calcularPrecio — backward compat after catalog refactor', () => {
     const r = calcularPrecio('premium', 'sur')
     expect(r.error).toBe('SERVICIO_DESCONOCIDO')
   })
+
+  // santo_domingo zone — R-PR-01: same tier as norte/sur
+  it('alimentario_mensual + santo_domingo → precio same as norte, adelanto=17.5 (R-PR-01)', () => {
+    const r = calcularPrecio('alimentario_mensual', 'santo_domingo')
+    expect(r.error).toBeUndefined()
+    expect(r.precio_total).toBe(35)
+    expect(r.requiere_adelanto).toBe(true)
+    expect(r.monto_adelanto).toBe(17.5)
+  })
+
+  it('santo_domingo zone is accepted (no zona inválida error) (R-PR-02)', () => {
+    const r = calcularPrecio('masaje', 'santo_domingo')
+    expect(r.error).toBeUndefined()
+  })
 })
