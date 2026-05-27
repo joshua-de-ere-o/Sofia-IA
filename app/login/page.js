@@ -1,12 +1,14 @@
 'use client'
 
-import { useEffect, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 
 import { Button } from '@/components/ui/button'
 import { getAuthErrorMessage } from '@/lib/staff-auth'
+import { createClient } from '@/lib/supabase'
 import { Mail, MoonStar } from 'lucide-react'
 
 export default function LoginPage() {
+  const supabase = useMemo(() => createClient(), [])
   const [email, setEmail] = useState('')
   const [loading, setLoading] = useState(false)
   const [message, setMessage] = useState('')
@@ -21,23 +23,42 @@ export default function LoginPage() {
     e.preventDefault()
     setLoading(true)
     setMessage('')
+    setAuthErrorMessage('')
 
-    const response = await fetch('/api/auth/magic-link', {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-      },
-      body: JSON.stringify({ email }),
-    })
+    try {
+      const response = await fetch('/api/auth/magic-link', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({ email }),
+      })
 
-    const payload = await response.json().catch(() => null)
+      const payload = await response.json().catch(() => null)
 
-    if (!response.ok) {
-      setMessage(getAuthErrorMessage(payload?.error) ?? 'No se pudo enviar el enlace mágico. Inténtalo otra vez.')
-    } else {
+      if (!response.ok) {
+        setMessage(getAuthErrorMessage(payload?.error) ?? 'No se pudo enviar el enlace mágico. Inténtalo otra vez.')
+        return
+      }
+
+      if (payload?.shouldSendMagicLink) {
+        await supabase.auth.signOut({ scope: 'local' })
+
+        await supabase.auth.signInWithOtp({
+          email: email.trim().toLowerCase(),
+          options: {
+            emailRedirectTo: `${window.location.origin}/auth/callback`,
+            shouldCreateUser: false,
+          },
+        })
+      }
+
       setMessage('¡Enlace mágico enviado! Revisa tu correo.')
+    } catch {
+      setMessage('No se pudo enviar el enlace mágico. Inténtalo otra vez.')
+    } finally {
+      setLoading(false)
     }
-    setLoading(false)
   }
 
   return (
