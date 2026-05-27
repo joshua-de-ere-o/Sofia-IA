@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 
 import { createManualAppointmentRecord, getManualAppointmentFormOptions, normalizeManualAppointmentPayload } from '@/lib/manual-appointment.js'
+import { runCreateManualAppointmentFlow } from '@/app/dashboard/hooks/useCitas'
 
 function makeMockSupabase({ existingPatient = null, slotConflicts = [], insertedCitaId = 'cita-1' } = {}) {
   const state = {
@@ -114,6 +115,12 @@ describe('normalizeManualAppointmentPayload', () => {
       motivo: 'Seguimiento mensual',
     })
   })
+
+  it('preserves an explicit pending-payment status selected by CRM', () => {
+    const result = normalizeManualAppointmentPayload({ ...VALID_INPUT, estado: 'pendiente_pago' })
+
+    expect(result.estado).toBe('pendiente_pago')
+  })
 })
 
 describe('getManualAppointmentFormOptions', () => {
@@ -122,6 +129,12 @@ describe('getManualAppointmentFormOptions', () => {
 
     expect(result.services.some((service) => service.value === 'alimentario_exclusivo')).toBe(true)
     expect(result.services.some((service) => service.value === 'taller_empresarial')).toBe(false)
+  })
+
+  it('limits virtual bookings to the virtual zone', () => {
+    const result = getManualAppointmentFormOptions('alimentario_exclusivo', 'virtual')
+
+    expect(result.zonas).toEqual([{ value: 'virtual', label: 'Virtual' }])
   })
 })
 
@@ -181,5 +194,95 @@ describe('createManualAppointmentRecord', () => {
       nombre: 'Ana Torres',
       fecha_nacimiento: '1990-03-15',
     })
+  })
+
+  it('rejects an occupied slot when another active appointment already exists', async () => {
+    const supabase = makeMockSupabase({
+      slotConflicts: [{ id: 'cita-activa-1', fecha: '2026-06-10', hora: '09:00:00', estado: 'confirmada' }],
+    })
+
+    const result = await createManualAppointmentRecord(supabase, VALID_INPUT)
+
+    expect(result).toEqual({ error: 'Ya existe una cita activa en ese horario. Elegí otro turno.' })
+    expect(supabase.state.patientsInserted).toHaveLength(0)
+    expect(supabase.state.citasInserted).toHaveLength(0)
+  })
+
+  it('allows a cancelled slot to be reused for a new manual appointment', async () => {
+    const supabase = makeMockSupabase({
+      slotConflicts: [{ id: 'cita-cancelada-1', fecha: '2026-06-10', hora: '09:00:00', estado: 'cancelada' }],
+    })
+
+    const result = await createManualAppointmentRecord(supabase, VALID_INPUT)
+
+    expect(result.success).toBe(true)
+    expect(supabase.state.citasInserted).toHaveLength(1)
+  })
+
+  it('allows a no_show slot to be reused for a new manual appointment', async () => {
+    const supabase = makeMockSupabase({
+      slotConflicts: [{ id: 'cita-no-show-1', fecha: '2026-06-10', hora: '09:00:00', estado: 'no_show' }],
+    })
+
+    const fetchSpy = globalThis.fetch
+    const fetchCalls = []
+    globalThis.fetch = async (...args) => {
+      fetchCalls.push(args)
+      return { ok: true }
+    }
+
+    try {
+      const result = await createManualAppointmentRecord(supabase, VALID_INPUT)
+
+      expect(result.success).toBe(true)
+      expect(supabase.state.citasInserted).toHaveLength(1)
+      expect(fetchCalls).toHaveLength(0)
+    } finally {
+      globalThis.fetch = fetchSpy
+    }
+  })
+})
+
+describe('runCreateManualAppointmentFlow', () => {
+  it('refreshes the agenda after a successful manual save', async () => {
+    const actionLoadingCalls = []
+    const manualErrorCalls = []
+    const fetchCalls = []
+
+    const result = await runCreateManualAppointmentFlow({
+      payload: VALID_INPUT,
+      createManualAppointmentAction: async () => ({ success: true }),
+      fetchCitas: async () => {
+        fetchCalls.push('refresh')
+      },
+      setActionLoading: (value) => actionLoadingCalls.push(value),
+      setManualError: (value) => manualErrorCalls.push(value),
+    })
+
+    expect(result).toEqual({ success: true, date: '2026-06-10' })
+    expect(fetchCalls).toEqual(['refresh'])
+    expect(actionLoadingCalls).toEqual(['manual-create', null])
+    expect(manualErrorCalls).toEqual([''])
+  })
+
+  it('keeps the CRM error local and skips agenda refresh when the manual save fails', async () => {
+    const actionLoadingCalls = []
+    const manualErrorCalls = []
+    const fetchCalls = []
+
+    const result = await runCreateManualAppointmentFlow({
+      payload: VALID_INPUT,
+      createManualAppointmentAction: async () => ({ error: 'Ya existe una cita activa en ese horario. Elegí otro turno.' }),
+      fetchCitas: async () => {
+        fetchCalls.push('refresh')
+      },
+      setActionLoading: (value) => actionLoadingCalls.push(value),
+      setManualError: (value) => manualErrorCalls.push(value),
+    })
+
+    expect(result).toEqual({ error: 'Ya existe una cita activa en ese horario. Elegí otro turno.' })
+    expect(fetchCalls).toEqual([])
+    expect(actionLoadingCalls).toEqual(['manual-create', null])
+    expect(manualErrorCalls).toEqual(['', 'Ya existe una cita activa en ese horario. Elegí otro turno.'])
   })
 })

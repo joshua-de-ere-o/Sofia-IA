@@ -9,15 +9,28 @@ import { CitasTable } from '../components/CitasTable'
 import { CitaCard } from '../components/CitaCard'
 import { CitasCalendar } from '../components/CitasCalendar'
 import { HorariosEspecialesCard } from '../components/HorariosEspecialesCard'
+import { ManualAppointmentDialog } from '../components/ManualAppointmentDialog'
 
 export function CitasTab() {
-  const { citas, loading, actionLoading, handleEstado, handleVerificarPago, handleReagendar, openVoucher } = useCitas()
+  const {
+    citas,
+    loading,
+    actionLoading,
+    manualError,
+    clearManualError,
+    handleEstado,
+    handleVerificarPago,
+    handleReagendar,
+    handleCreateManual,
+    openVoucher,
+  } = useCitas()
 
   const today = new Date().toISOString().split('T')[0]
   const [estadoFiltro, setEstadoFiltro] = useState('todos')
   const [fechaFiltro, setFechaFiltro] = useState(today)
   const [vista, setVista] = useState('lista')
   const [showLoading, setShowLoading] = useState(false)
+  const [manualDialogOpen, setManualDialogOpen] = useState(false)
 
   useEffect(() => {
     if (!loading) {
@@ -123,6 +136,10 @@ export function CitasTab() {
               Quitar Filtros
             </Button>
           )}
+
+          <Button onClick={() => { clearManualError(); setManualDialogOpen(true) }}>
+            Agendar cita
+          </Button>
         </div>
       </div>
 
@@ -168,6 +185,20 @@ export function CitasTab() {
 
       {/* Horarios especiales — collapsible card below agenda (ADR-7) */}
       <HorariosEspecialesCard />
+
+      <ManualAppointmentDialog
+        open={manualDialogOpen}
+        onOpenChange={(nextOpen) => {
+          if (!nextOpen) clearManualError()
+          setManualDialogOpen(nextOpen)
+        }}
+        onSubmit={handleCreateManual}
+        loading={actionLoading === 'manual-create'}
+        errorMessage={manualError}
+        onCreated={(result) => {
+          if (result?.date) setFechaFiltro(result.date)
+        }}
+      />
     </div>
   )
 }
