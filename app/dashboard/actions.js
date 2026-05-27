@@ -1,6 +1,7 @@
 'use server'
 
 import { createServerSupabaseClient } from '@/lib/supabase-server'
+import { createManualAppointmentRecord } from '@/lib/manual-appointment'
 import {
   validateExcepcionInput,
   expandDateRange,
@@ -275,6 +276,14 @@ export async function verificarPago(cita_id) {
   if (errorCita) return { error: errorCita.message }
   
   return { success: true }
+}
+
+/**
+ * Crear una cita manual desde el CRM sin pasar por Sofía.
+ */
+export async function createManualAppointment(input) {
+  const supabase = await createServerSupabaseClient()
+  return createManualAppointmentRecord(supabase, input)
 }
 
 /**
