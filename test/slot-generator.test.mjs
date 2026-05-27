@@ -24,6 +24,7 @@ import { describe, it, expect } from 'vitest'
 import {
   computeDaySlots,
   generateSlots,
+  generateAvailability,
   buildSlots,
   BASE_MORNING_SLOTS,
   BASE_AFTERNOON_SLOTS,
@@ -370,5 +371,127 @@ describe('generateSlots — full range generator', () => {
     expect(horarios).not.toContain('08:00')
     expect(horarios).not.toContain('09:30')
     expect(horarios).toContain('10:00')
+  })
+})
+
+// ---------------------------------------------------------------------------
+// generateAvailability — TZ-aware production entry point
+// ---------------------------------------------------------------------------
+
+describe('generateAvailability', () => {
+  // 2026-06-09 is a Tuesday
+  const FECHA = '2026-06-09'
+  const TZ = 'America/Guayaquil'
+
+  // Ecuador is UTC-5 (no DST)
+  // 2026-06-09T15:00:00Z → 2026-06-09T10:00:00 Ecuador local
+  const NOW_MIDDAY_UTC = new Date('2026-06-09T15:00:00Z')
+
+  it('happy path: output matches equivalent generateSlots call', () => {
+    const feriadosSet = new Set()
+    const excepcionesMap = new Map()
+    const occupiedSet = new Set()
+
+    const localStr = NOW_MIDDAY_UTC.toLocaleString('en-US', { timeZone: TZ })
+    const localNow = new Date(localStr)
+    const todayStr =
+      localNow.getFullYear() +
+      '-' +
+      String(localNow.getMonth() + 1).padStart(2, '0') +
+      '-' +
+      String(localNow.getDate()).padStart(2, '0')
+    const currentHourStr =
+      String(localNow.getHours()).padStart(2, '0') +
+      ':' +
+      String(localNow.getMinutes()).padStart(2, '0')
+
+    const expected = generateSlots({
+      fechaInicio: FECHA,
+      fechaFin: FECHA,
+      feriadosSet,
+      excepcionesMap,
+      occupiedSet,
+      todayStr,
+      currentHourStr,
+    })
+
+    const actual = generateAvailability({
+      fechaInicio: FECHA,
+      fechaFin: FECHA,
+      feriadosSet,
+      excepcionesMap,
+      occupiedSet,
+      timeZone: TZ,
+      now: NOW_MIDDAY_UTC,
+    })
+
+    expect(actual).toEqual(expected)
+  })
+
+  it('near-midnight TZ: 04:30 UTC is still the previous day in Ecuador (UTC-5)', () => {
+    // 2026-06-09T04:30:00Z → 2026-06-08T23:30:00 Ecuador → todayStr should be 2026-06-08
+    const nowNearMidnight = new Date('2026-06-09T04:30:00Z')
+
+    const result = generateAvailability({
+      fechaInicio: '2026-06-08',
+      fechaFin: '2026-06-09',
+      feriadosSet: new Set(),
+      excepcionesMap: new Map(),
+      occupiedSet: new Set(),
+      timeZone: TZ,
+      now: nowNearMidnight,
+    })
+
+    // 2026-06-08 is a Monday. todayStr = 2026-06-08 and currentHourStr = 23:30
+    // → all slots on 2026-06-08 should be filtered (past); 2026-06-09 intact
+    const slots08 = result['2026-06-08']?.horarios ?? []
+    expect(slots08).toHaveLength(0)
+
+    // 2026-06-09 (Tuesday) should have all base slots since it's a future day
+    const slots09 = result['2026-06-09']?.horarios ?? []
+    expect(slots09).toEqual([...BASE_MORNING_SLOTS, ...BASE_AFTERNOON_SLOTS])
+  })
+
+  it('past-slot filter on TZ-today: slots before 14:00 Ecuador are absent on today', () => {
+    // 2026-06-09T19:00:00Z → 2026-06-09T14:00:00 Ecuador local
+    const nowAt14Ecuador = new Date('2026-06-09T19:00:00Z')
+
+    const result = generateAvailability({
+      fechaInicio: FECHA,
+      fechaFin: FECHA,
+      feriadosSet: new Set(),
+      excepcionesMap: new Map(),
+      occupiedSet: new Set(),
+      timeZone: TZ,
+      now: nowAt14Ecuador,
+    })
+
+    const horarios = result[FECHA]?.horarios ?? []
+
+    // Slots at or before 14:00 (currentHourStr) must be gone
+    expect(horarios).not.toContain('08:00')
+    expect(horarios).not.toContain('11:30')
+    expect(horarios).not.toContain('14:00')
+
+    // Slots after 14:00 must be present (15:00 and 15:30 are the first base afternoon ones)
+    expect(horarios).toContain('15:00')
+    expect(horarios).toContain('15:30')
+  })
+
+  it('feriado preservation: feriado date returns zero slots via generateAvailability (SC-06)', () => {
+    const feriadosSet = new Set([FECHA])
+
+    const result = generateAvailability({
+      fechaInicio: FECHA,
+      fechaFin: FECHA,
+      feriadosSet,
+      excepcionesMap: new Map(),
+      occupiedSet: new Set(),
+      timeZone: TZ,
+      now: NOW_MIDDAY_UTC,
+    })
+
+    // Feriado → zero slots → date absent from result
+    expect(result[FECHA]).toBeUndefined()
   })
 })
