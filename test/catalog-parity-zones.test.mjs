@@ -116,65 +116,12 @@ describe('Catalog parity: lib/catalog/zonas.json ⇄ agent-runner/config.ts', ()
   })
 })
 
-/**
- * Extract service IDs from CATALOGO_SERVICIOS in config.ts.
- * Matches top-level object keys inside the `export const CATALOGO_SERVICIOS = { ... }` block.
- */
-function extractServiciosFromConfigTs() {
-  const src = readFileSync(CONFIG_PATH, 'utf-8')
+describe('Servicios catalog: lib/catalog/servicios.json structure (post-unification)', () => {
+  // After unification, config.ts imports servicios.json directly, so set-equality
+  // against an extracted CATALOGO_SERVICIOS would be circular. The structure tests
+  // here still protect against malformed entries in the single source of truth.
+  // The "config.ts imports servicios.json" invariant is enforced in catalog-sync.test.mjs.
 
-  // Find the CATALOGO_SERVICIOS object
-  const start = src.indexOf('export const CATALOGO_SERVICIOS')
-  if (start === -1) throw new Error('CATALOGO_SERVICIOS not found in config.ts')
-
-  // Slice to the closing `};` — roughly 200 lines, so 8000 chars is safe
-  const block = src.slice(start, start + 8000)
-
-  // Find the opening brace
-  const braceIdx = block.indexOf('{')
-  if (braceIdx === -1) throw new Error('CATALOGO_SERVICIOS opening brace not found')
-
-  // Walk forward tracking brace depth to find the closing `}`
-  let depth = 0
-  let closeIdx = -1
-  for (let i = braceIdx; i < block.length; i++) {
-    if (block[i] === '{') depth++
-    else if (block[i] === '}') {
-      depth--
-      if (depth === 0) { closeIdx = i; break }
-    }
-  }
-  if (closeIdx === -1) throw new Error('CATALOGO_SERVICIOS closing brace not found')
-
-  const body = block.slice(braceIdx + 1, closeIdx)
-
-  // Top-level keys are unquoted identifiers or quoted strings at depth=0
-  // Pattern: line starts with optional whitespace then `key:` (TS object shorthand)
-  const ids = new Set()
-  // Match top-level keys: identifier or quoted string followed by a colon
-  const keyPattern = /^\s+([a-zA-Z_][a-zA-Z0-9_]*)\s*:/gm
-  let m
-  while ((m = keyPattern.exec(body)) !== null) {
-    // Only top-level keys have exactly one level of indentation (2 spaces)
-    // We detect "top-level" by checking that the key is a direct property of the catalog
-    // (inner props like `id:`, `label:` etc are nested). We extract all keys and then filter
-    // by matching them against the servicios.json IDs — but that creates a circular dependency.
-    // Instead, extract all candidate keys and let the set-equality assertion surface mismatches.
-    ids.add(m[1])
-  }
-
-  // Filter to only the known service-level keys by removing nested property names.
-  // We know nested props from the Servicio shape: id, label, precio, duracion_min, categoria,
-  // agendable, modalidades, zonas_permitidas, requiere_adelanto, permite_combo, derivacion_motivo.
-  const NESTED_PROPS = new Set([
-    'id', 'label', 'precio', 'duracion_min', 'categoria',
-    'agendable', 'modalidades', 'zonas_permitidas', 'requiere_adelanto',
-    'permite_combo', 'derivacion_motivo',
-  ])
-  return new Set([...ids].filter(k => !NESTED_PROPS.has(k)))
-}
-
-describe('Catalog parity: lib/catalog/servicios.json ⇄ agent-runner/config.ts (W-01)', () => {
   it('lib/catalog/servicios.json exists', () => {
     expect(existsSync(SERVICIOS_JSON_PATH), 'lib/catalog/servicios.json must exist').toBe(true)
   })
@@ -186,7 +133,7 @@ describe('Catalog parity: lib/catalog/servicios.json ⇄ agent-runner/config.ts 
     expect(data.length).toBeGreaterThan(0)
   })
 
-  it('every service in servicios.json has required fields: id, label, precio', () => {
+  it('every service has required fields: id, label, precio (number)', () => {
     const services = JSON.parse(readFileSync(SERVICIOS_JSON_PATH, 'utf-8'))
     for (const s of services) {
       expect(s.id, 'service missing id').toBeTruthy()
@@ -195,28 +142,24 @@ describe('Catalog parity: lib/catalog/servicios.json ⇄ agent-runner/config.ts 
     }
   })
 
-  it('service IDs in servicios.json match CATALOGO_SERVICIOS keys in config.ts', () => {
-    const jsonIds = new Set(JSON.parse(readFileSync(SERVICIOS_JSON_PATH, 'utf-8')).map(s => s.id))
-    const configIds = extractServiciosFromConfigTs()
-
-    const inJsonNotConfig = [...jsonIds].filter(id => !configIds.has(id))
-    const inConfigNotJson = [...configIds].filter(id => !jsonIds.has(id))
-
-    expect(
-      inJsonNotConfig,
-      `Services in servicios.json but not in config.ts CATALOGO_SERVICIOS: ${inJsonNotConfig.join(', ')}`
-    ).toHaveLength(0)
-
-    expect(
-      inConfigNotJson,
-      `Services in config.ts CATALOGO_SERVICIOS but not in servicios.json: ${inConfigNotJson.join(', ')}`
-    ).toHaveLength(0)
+  it('service IDs are unique across the catalog', () => {
+    const services = JSON.parse(readFileSync(SERVICIOS_JSON_PATH, 'utf-8'))
+    const ids = services.map(s => s.id)
+    const unique = new Set(ids)
+    expect(unique.size, `Duplicate service IDs found: ${ids.length} total, ${unique.size} unique`).toBe(ids.length)
   })
 
-  it('both sides have the same service count', () => {
-    const jsonIds = JSON.parse(readFileSync(SERVICIOS_JSON_PATH, 'utf-8')).map(s => s.id)
-    const configIds = extractServiciosFromConfigTs()
-    expect(jsonIds.length).toBe(configIds.size)
+  it('catalog invariants: agendable=false services have derivacion_motivo and duracion_min=null', () => {
+    const services = JSON.parse(readFileSync(SERVICIOS_JSON_PATH, 'utf-8'))
+    for (const s of services) {
+      if (s.agendable === false) {
+        expect(s.derivacion_motivo, `${s.id} is not agendable but has no derivacion_motivo`).toBeTruthy()
+        expect(s.duracion_min, `${s.id} is not agendable but duracion_min is not null`).toBeNull()
+      } else {
+        expect(typeof s.duracion_min, `${s.id} is agendable but duracion_min is not a number`).toBe('number')
+        expect(s.duracion_min, `${s.id} duracion_min must be > 0`).toBeGreaterThan(0)
+      }
+    }
   })
 })
 
