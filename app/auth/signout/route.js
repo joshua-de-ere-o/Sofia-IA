@@ -3,6 +3,8 @@ import { revalidatePath } from 'next/cache'
 import { cookies } from 'next/headers'
 import { redirect } from 'next/navigation'
 
+import { PIN_UNLOCK_COOKIE_NAME } from '@/lib/staff-auth'
+
 export async function POST() {
   // Solo se ejecuta si existen las variables de entorno para evitar crashear el preview mode
   if (process.env.NEXT_PUBLIC_SUPABASE_URL) {
@@ -12,7 +14,7 @@ export async function POST() {
 
   const cookieStore = await cookies()
   // Limpiar la cookie del PIN
-  cookieStore.delete('kely_pin_unlocked')
+  cookieStore.delete(PIN_UNLOCK_COOKIE_NAME)
 
   revalidatePath('/', 'layout')
 

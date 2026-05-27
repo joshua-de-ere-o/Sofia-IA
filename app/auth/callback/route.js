@@ -1,6 +1,9 @@
 import { NextResponse } from 'next/server'
 import { createServerClient } from '@supabase/ssr'
 
+import { createCookieOperationStore, PIN_UNLOCK_COOKIE_NAME } from '@/lib/staff-auth'
+import { findAuthorizedStaffForUser } from '@/lib/staff-auth-server'
+
 // Valida que next sea una ruta interna segura (evita open-redirect)
 function safeNext(raw) {
   if (!raw || typeof raw !== 'string') return '/dashboard'
@@ -15,7 +18,8 @@ export async function GET(request) {
   const next = safeNext(searchParams.get('next'))
 
   // Crear la respuesta de redirección primero para poder adjuntarle las cookies de sesión
-  const response = NextResponse.redirect(`${origin}${next}`)
+  const cookieStore = createCookieOperationStore()
+  let response = NextResponse.redirect(`${origin}${next}`)
 
   if (code) {
     const supabase = createServerClient(
@@ -27,10 +31,7 @@ export async function GET(request) {
             return request.cookies.getAll()
           },
           setAll(cookiesToSet) {
-            cookiesToSet.forEach(({ name, value, options }) => {
-              request.cookies.set(name, value)
-              response.cookies.set(name, value, options)
-            })
+            cookieStore.record(cookiesToSet)
           },
         },
       }
@@ -38,9 +39,21 @@ export async function GET(request) {
 
     const { error } = await supabase.auth.exchangeCodeForSession(code)
     if (!error) {
+      const { data: { user } } = await supabase.auth.getUser()
+      const { authorized } = await findAuthorizedStaffForUser(supabase, user)
+
+      if (!authorized) {
+        response = NextResponse.redirect(`${origin}/login?error=staff_not_authorized`)
+        await supabase.auth.signOut()
+        response.cookies.delete(PIN_UNLOCK_COOKIE_NAME)
+        cookieStore.apply(response)
+        return response
+      }
+
       // Limpiar cookie del PIN para que el nuevo usuario valide su propio PIN
       // (importante si cambió de usuario: Joshua ↔ Dra. Kelly en el mismo navegador)
-      response.cookies.delete('kely_pin_unlocked')
+      response.cookies.delete(PIN_UNLOCK_COOKIE_NAME)
+      cookieStore.apply(response)
       return response
     }
 

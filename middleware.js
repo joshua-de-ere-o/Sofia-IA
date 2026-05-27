@@ -1,7 +1,11 @@
 import { NextResponse } from 'next/server'
 import { createServerClient } from '@supabase/ssr'
 
+import { createCookieOperationStore, isPinUnlockCookieValid, PIN_UNLOCK_COOKIE_NAME } from '@/lib/staff-auth'
+import { findAuthorizedStaffForUser } from '@/lib/staff-auth-server'
+
 export async function middleware(request) {
+  const cookieStore = createCookieOperationStore()
   let response = NextResponse.next({
     request: {
       headers: request.headers,
@@ -22,13 +26,11 @@ export async function middleware(request) {
           return request.cookies.getAll()
         },
         setAll(cookiesToSet) {
-          cookiesToSet.forEach(({ name, value, options }) => request.cookies.set(name, value))
+          cookieStore.record(cookiesToSet)
           response = NextResponse.next({
             request,
           })
-          cookiesToSet.forEach(({ name, value, options }) =>
-            response.cookies.set(name, value, options)
-          )
+          cookieStore.apply(response)
         },
       },
     }
@@ -39,11 +41,24 @@ export async function middleware(request) {
   // Helper: crear redirect que preserva las cookies de sesión actualizadas por getUser()
   function redirectWithCookies(url) {
     const redirectResponse = NextResponse.redirect(url)
-    // Copiar cookies de sesión actualizadas al redirect para no perderlas
-    response.cookies.getAll().forEach((cookie) => {
-      redirectResponse.cookies.set(cookie.name, cookie.value)
-    })
+    cookieStore.apply(redirectResponse)
     return redirectResponse
+  }
+
+  async function redirectUnauthorizedStaff() {
+    const redirectResponse = NextResponse.redirect(new URL('/login?error=staff_not_authorized', request.url))
+    await supabase.auth.signOut()
+    cookieStore.apply(redirectResponse)
+    redirectResponse.cookies.delete(PIN_UNLOCK_COOKIE_NAME)
+    return redirectResponse
+  }
+
+  if (user) {
+    const { authorized } = await findAuthorizedStaffForUser(supabase, user)
+
+    if (!authorized) {
+      return redirectUnauthorizedStaff()
+    }
   }
 
   // Proteger la ruta de dashboard si no hay usuario
@@ -51,19 +66,26 @@ export async function middleware(request) {
     return redirectWithCookies(new URL('/login', request.url))
   }
 
+  const pinUnlockedCookie = request.cookies.get(PIN_UNLOCK_COOKIE_NAME)?.value
+  const hasValidPinUnlock = user ? await isPinUnlockCookieValid(pinUnlockedCookie, user.id) : false
+
   // Proteger el acceso de los empleados/doctor con el PIN rápido
   if (request.nextUrl.pathname.startsWith('/dashboard')) {
-    const pinUnlocked = request.cookies.get('kely_pin_unlocked')
-    // Si no está la cookie desbloqueada, redirigir al pin pad
-    if (!pinUnlocked) {
-      return redirectWithCookies(new URL('/pin', request.url))
+    // Si no está la cookie desbloqueada válida, redirigir al pin pad
+    if (!hasValidPinUnlock) {
+      const redirectResponse = redirectWithCookies(new URL('/pin', request.url))
+
+      if (pinUnlockedCookie) {
+        redirectResponse.cookies.delete(PIN_UNLOCK_COOKIE_NAME)
+      }
+
+      return redirectResponse
     }
   }
 
   // Si ya está logueado y desbloqueado, no mostrar login/pin
   if ((request.nextUrl.pathname === '/login' || request.nextUrl.pathname === '/pin') && user) {
-    const pinUnlocked = request.cookies.get('kely_pin_unlocked')
-    if (pinUnlocked) {
+    if (hasValidPinUnlock) {
       return redirectWithCookies(new URL('/dashboard', request.url))
     }
   }
