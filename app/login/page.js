@@ -1,34 +1,39 @@
 'use client'
 
-import { useState } from 'react'
-import { createClient } from '@/lib/supabase'
+import { useEffect, useState } from 'react'
+
 import { Button } from '@/components/ui/button'
+import { getAuthErrorMessage } from '@/lib/staff-auth'
 import { Mail, MoonStar } from 'lucide-react'
 
 export default function LoginPage() {
   const [email, setEmail] = useState('')
   const [loading, setLoading] = useState(false)
   const [message, setMessage] = useState('')
-  const supabase = createClient()
+  const [authErrorMessage, setAuthErrorMessage] = useState('')
+
+  useEffect(() => {
+    const errorCode = new URLSearchParams(window.location.search).get('error')
+    setAuthErrorMessage(getAuthErrorMessage(errorCode) ?? '')
+  }, [])
 
   const handleLogin = async (e) => {
     e.preventDefault()
     setLoading(true)
     setMessage('')
 
-    // Limpieza preventiva: elimina residuos de intentos previos (code_verifier stale,
-    // tokens viejos) para que el nuevo signInWithOtp genere un estado PKCE limpio.
-    await supabase.auth.signOut({ scope: 'local' })
-
-    const { error } = await supabase.auth.signInWithOtp({
-      email,
-      options: {
-        emailRedirectTo: `${location.origin}/auth/callback`,
+    const response = await fetch('/api/auth/magic-link', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
       },
+      body: JSON.stringify({ email }),
     })
 
-    if (error) {
-      setMessage('Error al enviar el enlace: ' + error.message)
+    const payload = await response.json().catch(() => null)
+
+    if (!response.ok) {
+      setMessage(getAuthErrorMessage(payload?.error) ?? 'No se pudo enviar el enlace mágico. Inténtalo otra vez.')
     } else {
       setMessage('¡Enlace mágico enviado! Revisa tu correo.')
     }
@@ -76,9 +81,9 @@ export default function LoginPage() {
           </Button>
         </form>
 
-        {message && (
+        {(authErrorMessage || message) && (
           <div className="mt-4 rounded-2xl border border-border/70 bg-background/70 px-4 py-3 text-center text-sm text-muted-foreground">
-            {message}
+            {message || authErrorMessage}
           </div>
         )}
       </div>
