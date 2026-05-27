@@ -1,20 +1,10 @@
 import { NextResponse } from 'next/server'
-import { createServerClient } from '@supabase/ssr'
 
 import { findAuthorizedStaffByEmail } from '@/lib/staff-auth-server'
-import {
-  createCookieOperationStore,
-  normalizeEmail,
-} from '@/lib/staff-auth'
+import { normalizeEmail } from '@/lib/staff-auth'
 
-function jsonWithCookies(payload, { status = 200, cookieStore } = {}) {
-  const response = NextResponse.json(payload, { status })
-  cookieStore?.apply(response)
-  return response
-}
-
-function successResponse(cookieStore) {
-  return jsonWithCookies({ success: true }, { cookieStore })
+function successResponse({ shouldSendMagicLink = false } = {}) {
+  return NextResponse.json({ success: true, shouldSendMagicLink })
 }
 
 export async function POST(request) {
@@ -41,39 +31,5 @@ export async function POST(request) {
 
   const { authorized } = await findAuthorizedStaffByEmail(email)
 
-  if (!authorized) {
-    return successResponse()
-  }
-
-  const cookieStore = createCookieOperationStore()
-  const supabase = createServerClient(
-    process.env.NEXT_PUBLIC_SUPABASE_URL,
-    process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY,
-    {
-      cookies: {
-        getAll() {
-          return request.cookies.getAll()
-        },
-        setAll(cookiesToSet) {
-          cookieStore.record(cookiesToSet)
-        },
-      },
-    }
-  )
-
-  await supabase.auth.signOut({ scope: 'local' })
-
-  const { error } = await supabase.auth.signInWithOtp({
-    email,
-    options: {
-      emailRedirectTo: `${request.nextUrl.origin}/auth/callback`,
-      shouldCreateUser: false,
-    },
-  })
-
-  if (error) {
-    return successResponse(cookieStore)
-  }
-
-  return successResponse(cookieStore)
+  return successResponse({ shouldSendMagicLink: authorized })
 }
