@@ -1,5 +1,6 @@
 import "jsr:@supabase/functions-js/edge-runtime.d.ts";
 import { createClient } from "jsr:@supabase/supabase-js";
+import { collectPendingAppointmentReminders } from "./reminder-selection.ts";
 
 // ──────────────────────────────────────────────
 // Helpers
@@ -192,19 +193,14 @@ const SYSTEM_RECORDATORIO = `Eres Sofía, la asistente virtual de la Dra. Kely L
 Redacta UN SOLO mensaje de WhatsApp en español (Ecuador), cálido y profesional.
 No uses asteriscos ni emojis excesivos. Máximo 3 líneas.`;
 
-/** Recordatorios 24h y 2h antes de la cita — idéntico a versión previa. */
+/** Recordatorios 24h y 2h antes de la cita, reutilizando la selección compartida. */
 async function procesarRecordatoriosCitas(supabase: ReturnType<typeof createClient>): Promise<void> {
   const now = nowGuayaquil();
-
-  const desde24h = new Date(now.getTime() + 23 * 60 * 60 * 1000 + 50 * 60 * 1000);
-  const hasta24h = new Date(now.getTime() + 24 * 60 * 60 * 1000 + 10 * 60 * 1000);
-  const desde2h = new Date(now.getTime() + 1 * 60 * 60 * 1000 + 50 * 60 * 1000);
-  const hasta2h = new Date(now.getTime() + 2 * 60 * 60 * 1000 + 10 * 60 * 1000);
 
   const { data: citas, error } = await supabase
     .from("citas")
     .select(`
-      id, fecha, hora, modalidad, servicio,
+      id, fecha, hora, modalidad, zona, servicio,
       reminder_24h_sent, reminder_2h_sent,
       pacientes!inner(nombre, telefono)
     `)
@@ -219,55 +215,28 @@ async function procesarRecordatoriosCitas(supabase: ReturnType<typeof createClie
     return;
   }
 
-  const batchRequests: BatchRequest[] = [];
-
-  for (const cita of citas) {
-    const paciente = (cita as any).pacientes;
-    if (!paciente?.telefono) continue;
-
-    const fechaHoraCita = new Date(`${cita.fecha}T${cita.hora}`);
-
-    if (!cita.reminder_24h_sent && fechaHoraCita >= desde24h && fechaHoraCita <= hasta24h) {
-      batchRequests.push({
-        custom_id: `24h_${cita.id}`,
-        params: {
-          model: MODEL,
-          max_tokens: 150,
-          system: SYSTEM_RECORDATORIO,
-          messages: [
-            {
-              role: "user",
-              content: `Redacta el recordatorio de 24 horas para ${paciente.nombre}.
-Fecha: ${cita.fecha}, Hora: ${cita.hora}, Modalidad: ${cita.modalidad}, Servicio: ${cita.servicio}.`,
-            },
-          ],
-        },
-      });
-    }
-
-    if (!cita.reminder_2h_sent && fechaHoraCita >= desde2h && fechaHoraCita <= hasta2h) {
-      batchRequests.push({
-        custom_id: `2h_${cita.id}`,
-        params: {
-          model: MODEL,
-          max_tokens: 100,
-          system: SYSTEM_RECORDATORIO,
-          messages: [
-            {
-              role: "user",
-              content: `Redacta el recordatorio de 2 horas para ${paciente.nombre}.
-Hora: ${cita.hora}, Modalidad: ${cita.modalidad}.`,
-            },
-          ],
-        },
-      });
-    }
-  }
-
-  if (batchRequests.length === 0) {
+  const reminders = collectPendingAppointmentReminders(citas as any[], now);
+  if (reminders.length === 0) {
     console.log("[Recordatorios] Sin recordatorios de cita pendientes para esta hora.");
     return;
   }
+
+  const batchRequests: BatchRequest[] = reminders.map((reminder) => ({
+    custom_id: `${reminder.reminderType}_${reminder.citaId}`,
+    params: {
+      model: MODEL,
+      max_tokens: reminder.reminderType === "24h" ? 150 : 100,
+      system: SYSTEM_RECORDATORIO,
+      messages: [
+        {
+          role: "user",
+          content: reminder.reminderType === "24h"
+            ? `Redacta el recordatorio de 24 horas para ${reminder.nombre}.\nFecha: ${reminder.fecha}, Hora: ${reminder.hora}, Modalidad: ${reminder.modalidad}, Servicio: ${reminder.servicio ?? "consulta"}.`
+            : `Redacta el recordatorio de 2 horas para ${reminder.nombre}.\nHora: ${reminder.hora}, Modalidad: ${reminder.modalidad}.`,
+        },
+      ],
+    },
+  }));
 
   console.log(`[Recordatorios] Procesando batch de ${batchRequests.length} recordatorios...`);
 
@@ -281,12 +250,11 @@ Hora: ${cita.hora}, Modalidad: ${cita.modalidad}.`,
 
   for (const { custom_id, text } of textos) {
     const [tipo, citaId] = custom_id.split("_");
-    const cita = citas.find((c: any) => c.id === citaId);
-    if (!cita) continue;
+    const reminder = reminders.find((item) => item.citaId === citaId && item.reminderType === tipo);
+    if (!reminder) continue;
 
-    const paciente = (cita as any).pacientes;
-    await sendWhatsApp(paciente.telefono, text);
-    console.log(`[Recordatorios] Enviado ${tipo} a ${paciente.telefono}`);
+    await sendWhatsApp(reminder.phone, text);
+    console.log(`[Recordatorios] Enviado ${tipo} a ${reminder.phone}`);
 
     const update: Record<string, boolean> = {};
     if (tipo === "24h") update.reminder_24h_sent = true;

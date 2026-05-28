@@ -106,3 +106,22 @@ describe('SYSTEM_PROMPT — REGLA DE ORO and zones still present', () => {
     expect(prompt).toContain('4️⃣ Actualizar datos para recordatorios')
   })
 })
+
+describe('SYSTEM_PROMPT — recordatorios linking contract', () => {
+  it('asks first for name and appointment date, not birth date as an initial gate', () => {
+    expect(prompt).toContain('Pedirle al paciente los 2 datos obligatorios')
+    expect(prompt).toContain('Nombre completo')
+    expect(prompt).toContain('Fecha de su próxima cita con la Dra. Kely')
+    expect(prompt).not.toContain('Fecha de nacimiento (formato DD/MM/AAAA)')
+  })
+
+  it('asks appointment time only when name plus date remains ambiguous', () => {
+    expect(prompt).toContain('needs_time_tiebreaker')
+    expect(prompt).toContain('hora de la cita')
+  })
+
+  it('does not require fecha_nacimiento in verificar_datos_paciente schema', () => {
+    expect(content).toContain('hora_cita')
+    expect(content).toContain('required: ["nombre_completo", "fecha_cita", "from_number"]')
+  })
+})

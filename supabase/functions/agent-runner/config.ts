@@ -335,16 +335,16 @@ Si en tu turno anterior pediste al paciente que confirme el monto de su comproba
 Cuando el paciente exprese intención de registrar o actualizar sus datos para recibir recordatorios de citas (ej: "recordatorios", "quiero actualizar mis datos", "cargar mi número", "dejar mi teléfono", "quiero recibir recordatorios"), debés:
 
 1. Llamar la herramienta \`iniciar_actualizacion_datos\` con trigger="llm_intent".
-2. Pedirle al paciente los 3 datos obligatorios, UNO POR UNO, en este orden:
-   - **Nombre completo** (exactamente como figura en la cédula: 2 nombres + 2 apellidos)
-   - **Fecha de nacimiento** (formato DD/MM/AAAA)
-   - **Fecha de su próxima o última cita con la Dra. Kely** (formato DD/MM/AAAA)
-3. Para CADA fecha que el paciente proporcione, SIEMPRE llamar \`parse_appointment_date\` antes de continuar. NUNCA interpretes ni adivines fechas vos misma.
-4. Si \`parse_appointment_date\` devuelve \`ok:false\`, pedí la fecha de nuevo en formato DD/MM/AAAA. Podés reintentar MÁXIMO 2 veces por dato. Si el tercer intento también falla, escalá a la Dra. Kely con \`derivar_a_kelly\` motivo='default' y terminá el flujo.
-5. Cuando tenés los 3 datos válidos, llamar \`verificar_datos_paciente\`. Según el resultado:
+2. Pedirle al paciente los 2 datos obligatorios, UNO POR UNO, en este orden:
+   - **Nombre completo** (exactamente como figura en la cita o cédula)
+   - **Fecha de su próxima cita con la Dra. Kely** (formato DD/MM/AAAA)
+3. Para la fecha de cita, SIEMPRE llamar \`parse_appointment_date\` antes de continuar. NUNCA interpretes ni adivines fechas vos misma.
+4. Si \`parse_appointment_date\` devuelve \`ok:false\`, pedí la fecha de nuevo en formato DD/MM/AAAA. Podés reintentar MÁXIMO 2 veces. Si el tercer intento también falla, escalá a la Dra. Kely con \`derivar_a_kelly\` motivo='default' y terminá el flujo.
+5. Cuando tenés nombre + fecha válidos, llamar \`verificar_datos_paciente\`. Según el resultado:
    - \`match:'none'\`: pedí al paciente que revise el nombre o la fecha. Podés reintentar MÁXIMO 2 veces. Si fallan los 2 reintentos, escalá a la Dra. Kely.
-   - \`match:'multiple'\`: escalá a la Dra. Kely inmediatamente. NO ofrezcas reintentos.
-   - \`match:'unique'\`: llamar \`confirmar_actualizacion_datos\` con el modo sugerido.
+   - \`match:'needs_time_tiebreaker'\`: pedí la **hora de la cita** en formato HH:MM y volvé a llamar \`verificar_datos_paciente\` con \`hora_cita\`.
+   - \`match:'multiple'\`: escalá a la Dra. Kely inmediatamente. NO asignes el teléfono ni ofrezcas más intentos.
+   - \`match:'unique'\`: llamar \`confirmar_actualizacion_datos\` con el modo sugerido. Si el paciente quiere dejar además su fecha de nacimiento, podés enviarla como dato opcional, pero NUNCA la uses como requisito inicial.
 6. Según el resultado de \`confirmar_actualizacion_datos\`:
    - \`status:'updated'\`: enviá el mensaje de cierre (en mensaje_sofia).
    - \`status:'pending_approval'\`: enviá el mensaje intermedio al paciente (en mensaje_sofia). Dra. Kely recibirá una notificación para aprobar el cambio.
@@ -355,6 +355,7 @@ Cuando el paciente exprese intención de registrar o actualizar sus datos para r
 - Usá SIEMPRE "Dra. Kely" (con una sola L) en cualquier mensaje al paciente.
 - NUNCA actualices datos sin pasar por la herramienta \`confirmar_actualizacion_datos\`.
 - NUNCA interpretes fechas vos misma — siempre \`parse_appointment_date\` primero.
+- Solo pedí la hora de la cita si \`verificar_datos_paciente\` devuelve \`needs_time_tiebreaker\`.
 - Máximo 2 reintentos por campo antes de escalar.
 - El mensaje de cierre exitoso es: "¡Listo! Quedaron registrados tus datos. Desde ahora vas a recibir un recordatorio el día antes y otro un par de horas antes de cada cita con la Dra. Kely. En el mismo mensaje vas a poder confirmar, reprogramar o cancelar sin tener que escribir nada extra."
 - El mensaje de espera cuando la Dra. debe aprobar es: "Recibí tu solicitud. Está esperando confirmación de la Dra. Kely, te aviso apenas la apruebe."
@@ -488,7 +489,7 @@ export const TOOLS = [
       "Inicia el flujo de actualización de datos del paciente. Llamar cuando el paciente diga " +
       "'recordatorios', 'quiero actualizar mis datos', 'cargar mi número', 'dejar mi teléfono', " +
       "'quiero recibir recordatorios' o equivalentes. Devuelve un mensaje guía para pedirle al " +
-      "paciente los 3 datos obligatorios.",
+      "paciente los datos mínimos para vincular su número de WhatsApp con seguridad.",
     input_schema: {
       type: "object",
       properties: {
@@ -534,10 +535,9 @@ export const TOOLS = [
   {
     name: "verificar_datos_paciente",
     description:
-      "Verifica nombre completo + fecha de cita contra la BD usando similitud trigrama. " +
-      "Devuelve {match:'unique'|'multiple'|'none', candidates, paciente_id?, mode_suggested?}. " +
-      "NO actualiza nada — solo verifica identidad. Llamar solo después de haber parseado " +
-      "ambas fechas con parse_appointment_date.",
+      "Verifica nombre completo + fecha de cita y usa hora de cita solo como desempate si hace falta. " +
+      "Devuelve {match:'unique'|'needs_time_tiebreaker'|'multiple'|'none', candidates, paciente_id?, mode_suggested?}. " +
+      "NO actualiza nada — solo verifica identidad. Llamar después de parsear la fecha de cita, y reenviar con hora_cita solo si el primer resultado fue needs_time_tiebreaker.",
     input_schema: {
       type: "object",
       properties: {
@@ -549,16 +549,16 @@ export const TOOLS = [
           type: "string",
           description: "Fecha de la cita en formato YYYY-MM-DD (ya parseada por parse_appointment_date).",
         },
-        fecha_nacimiento: {
+        hora_cita: {
           type: "string",
-          description: "Fecha de nacimiento en formato YYYY-MM-DD (ya parseada por parse_appointment_date).",
+          description: "Hora de la cita en formato HH:MM[:SS]. Opcional; usar solo si nombre + fecha siguen ambiguos.",
         },
         from_number: {
           type: "string",
           description: "Número WhatsApp del sender.",
         },
       },
-      required: ["nombre_completo", "fecha_cita", "fecha_nacimiento", "from_number"],
+      required: ["nombre_completo", "fecha_cita", "from_number"],
     },
   },
   {
@@ -585,8 +585,8 @@ export const TOOLS = [
           description: "Mismo valor que from_number (el teléfono nuevo a registrar).",
         },
         fecha_nacimiento: {
-          type: "string",
-          description: "Fecha de nacimiento en formato YYYY-MM-DD (ya parseada).",
+          type: ["string", "null"],
+          description: "Fecha de nacimiento en formato YYYY-MM-DD. Opcional: solo si el paciente la quiere dejar como dato adicional.",
         },
         mode: {
           type: "string",
