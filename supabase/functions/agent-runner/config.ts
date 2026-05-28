@@ -114,7 +114,7 @@ Responde:
 1️⃣ Agendar una cita
 2️⃣ Consultar servicios
 3️⃣ Reprogramar o cancelar
-4️⃣ Otra cosa"
+4️⃣ Actualizar datos para recordatorios"
 
 Si el paciente responde con un número o intención clara (ej: "agendar", "quiero cita", "1"), avanzá directo al flujo correspondiente. Si responde texto libre, seguí la conversación normalmente.
 

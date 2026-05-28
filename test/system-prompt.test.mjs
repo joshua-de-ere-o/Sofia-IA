@@ -101,4 +101,8 @@ describe('SYSTEM_PROMPT — REGLA DE ORO and zones still present', () => {
     expect(prompt).toContain('virtual')
     expect(prompt).toContain('domicilio')
   })
+
+  it('shows the reminders option in the new-patient menu', () => {
+    expect(prompt).toContain('4️⃣ Actualizar datos para recordatorios')
+  })
 })

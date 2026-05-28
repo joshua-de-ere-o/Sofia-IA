@@ -5,6 +5,8 @@
 
 import { createClient } from "jsr:@supabase/supabase-js";
 
+import { buildGeminiRequestBody, toolsToGemini, toolsToOpenAI } from "./provider-payloads.ts";
+
 const PROVIDERS: Record<string, { defaultModel: string; endpoint: string }> = {
   anthropic: {
     defaultModel: "claude-haiku-4-5-20251001",
@@ -21,17 +23,6 @@ const PROVIDERS: Record<string, { defaultModel: string; endpoint: string }> = {
 };
 
 // ─── Conversiones de herramientas ─────────────────────────────────────────────
-
-function toolsToOpenAI(tools: any[]) {
-  return tools.map((t) => ({
-    type: "function",
-    function: { name: t.name, description: t.description, parameters: t.input_schema },
-  }));
-}
-
-function toolsToGemini(tools: any[]) {
-  return [{ functionDeclarations: tools.map((t) => ({ name: t.name, description: t.description, parameters: t.input_schema })) }];
-}
 
 // ─── Conversiones de mensajes ─────────────────────────────────────────────────
 
@@ -162,17 +153,7 @@ async function callOpenAI(apiKey: string, model: string, systemPrompt: string, m
 
 async function callGemini(apiKey: string, model: string, systemPrompt: string, messages: any[], tools: any[], maxTokens: number) {
   const endpoint = `${PROVIDERS.gemini.endpoint}/models/${model}:generateContent?key=${apiKey}`;
-  const body: any = {
-    systemInstruction: { parts: [{ text: systemPrompt }] },
-    contents: messagesToGemini(messages),
-    generationConfig: {
-      maxOutputTokens: maxTokens,
-      // Apaga el modo "thinking" de Gemini 2.5 Flash: ahorra tokens facturados
-      // y reduce latencia. Modelos sin thinking ignoran este campo silenciosamente.
-      thinkingConfig: { thinkingBudget: 0 },
-    },
-  };
-  if (tools.length > 0) body.tools = toolsToGemini(tools);
+  const body = buildGeminiRequestBody({ systemPrompt, messages, tools, maxTokens });
 
   const res = await fetch(endpoint, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
   if (!res.ok) throw new Error(`Gemini ${res.status}: ${await res.text()}`);

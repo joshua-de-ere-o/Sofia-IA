@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
 
 import { createManualAppointmentRecord, getManualAppointmentFormOptions, normalizeManualAppointmentPayload } from '@/lib/manual-appointment.js'
-import { runCreateManualAppointmentFlow } from '@/app/dashboard/hooks/useCitas'
+import { runCreateManualAppointmentFlow, runImportAppointmentsFlow } from '@/app/dashboard/hooks/useCitas'
 
 function makeMockSupabase({ existingPatient = null, slotConflicts = [], insertedCitaId = 'cita-1' } = {}) {
   const state = {
@@ -284,5 +284,31 @@ describe('runCreateManualAppointmentFlow', () => {
     expect(fetchCalls).toEqual([])
     expect(actionLoadingCalls).toEqual(['manual-create', null])
     expect(manualErrorCalls).toEqual(['', 'Ya existe una cita activa en ese horario. Elegí otro turno.'])
+  })
+})
+
+describe('runImportAppointmentsFlow', () => {
+  it('does not disturb the shared agenda refresh contract used by CRM actions', async () => {
+    const actionLoadingCalls = []
+    const importErrorCalls = []
+    const importResultCalls = []
+    const fetchCalls = []
+
+    const result = await runImportAppointmentsFlow({
+      formData: new FormData(),
+      importAppointmentsCsvAction: async () => ({ status: 'ok', imported: 1, duplicates: 0, warnings: 0, rejected: 0, rows: [] }),
+      fetchCitas: async () => {
+        fetchCalls.push('refresh')
+      },
+      setActionLoading: (value) => actionLoadingCalls.push(value),
+      setImportError: (value) => importErrorCalls.push(value),
+      setImportResult: (value) => importResultCalls.push(value),
+    })
+
+    expect(result).toMatchObject({ success: true, imported: 1 })
+    expect(fetchCalls).toEqual(['refresh'])
+    expect(importResultCalls.at(-1)).toMatchObject({ imported: 1 })
+    expect(importErrorCalls).toEqual([''])
+    expect(actionLoadingCalls).toEqual(['import-csv', null])
   })
 })

@@ -5,6 +5,7 @@ import { createClient } from '@/lib/supabase'
 import {
   actualizarEstadoCita,
   createManualAppointment,
+  importAppointmentsCsv,
   reagendarCita,
   verificarPago,
 } from '../actions'
@@ -32,12 +33,46 @@ export async function runCreateManualAppointmentFlow({
   return { success: true, date: payload.date }
 }
 
+export async function runImportAppointmentsFlow({
+  formData,
+  importAppointmentsCsvAction,
+  fetchCitas,
+  setActionLoading,
+  setImportError,
+  setImportResult,
+}) {
+  setActionLoading('import-csv')
+  setImportError('')
+
+  const result = await importAppointmentsCsvAction(formData)
+
+  setActionLoading(null)
+
+  if (result?.error) {
+    setImportError(result.error)
+    return { error: result.error }
+  }
+
+  setImportResult(result)
+  await fetchCitas()
+
+  return {
+    success: true,
+    imported: result.imported,
+    duplicates: result.duplicates,
+    warnings: result.warnings,
+    rejected: result.rejected,
+  }
+}
+
 export function useCitas() {
   const supabase = useMemo(() => createClient(), [])
   const [citas, setCitas] = useState([])
   const [loading, setLoading] = useState(true)
   const [actionLoading, setActionLoading] = useState(null)
   const [manualError, setManualError] = useState('')
+  const [importError, setImportError] = useState('')
+  const [importResult, setImportResult] = useState(null)
 
   const fetchCitas = useCallback(async () => {
     const { data } = await supabase
@@ -104,6 +139,22 @@ export function useCitas() {
     setManualError('')
   }, [])
 
+  const handleImportCsv = useCallback(async (formData) => {
+    return runImportAppointmentsFlow({
+      formData,
+      importAppointmentsCsvAction: importAppointmentsCsv,
+      fetchCitas,
+      setActionLoading,
+      setImportError,
+      setImportResult,
+    })
+  }, [fetchCitas])
+
+  const clearImportFeedback = useCallback(() => {
+    setImportError('')
+    setImportResult(null)
+  }, [])
+
   const openVoucher = useCallback(async (pago) => {
     const path = pago?.referencia
     if (!path) {
@@ -127,11 +178,15 @@ export function useCitas() {
     loading,
     actionLoading,
     manualError,
+    importError,
+    importResult,
     clearManualError,
+    clearImportFeedback,
     handleEstado,
     handleVerificarPago,
     handleReagendar,
     handleCreateManual,
+    handleImportCsv,
     openVoucher,
   }
 }

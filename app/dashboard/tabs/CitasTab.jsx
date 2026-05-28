@@ -10,27 +10,31 @@ import { CitaCard } from '../components/CitaCard'
 import { CitasCalendar } from '../components/CitasCalendar'
 import { HorariosEspecialesCard } from '../components/HorariosEspecialesCard'
 import { ManualAppointmentDialog } from '../components/ManualAppointmentDialog'
+import { AppointmentImportDialog } from '../components/appointment-import-dialog'
 
-export function CitasTab() {
-  const {
-    citas,
-    loading,
-    actionLoading,
-    manualError,
-    clearManualError,
-    handleEstado,
-    handleVerificarPago,
-    handleReagendar,
-    handleCreateManual,
-    openVoucher,
-  } = useCitas()
-
+export function CitasAgendaView({
+  citas,
+  loading,
+  actionLoading,
+  manualError,
+  importError,
+  importResult,
+  clearManualError,
+  clearImportFeedback,
+  handleEstado,
+  handleVerificarPago,
+  handleReagendar,
+  handleCreateManual,
+  handleImportCsv,
+  openVoucher,
+}) {
   const today = new Date().toISOString().split('T')[0]
   const [estadoFiltro, setEstadoFiltro] = useState('todos')
   const [fechaFiltro, setFechaFiltro] = useState(today)
   const [vista, setVista] = useState('lista')
   const [showLoading, setShowLoading] = useState(false)
   const [manualDialogOpen, setManualDialogOpen] = useState(false)
+  const [importDialogOpen, setImportDialogOpen] = useState(false)
 
   useEffect(() => {
     if (!loading) {
@@ -137,6 +141,9 @@ export function CitasTab() {
             </Button>
           )}
 
+          <Button variant="outline" onClick={() => { clearImportFeedback(); setImportDialogOpen(true) }}>
+            Importar CSV
+          </Button>
           <Button onClick={() => { clearManualError(); setManualDialogOpen(true) }}>
             Agendar cita
           </Button>
@@ -199,6 +206,22 @@ export function CitasTab() {
           if (result?.date) setFechaFiltro(result.date)
         }}
       />
+
+      <AppointmentImportDialog
+        open={importDialogOpen}
+        onOpenChange={setImportDialogOpen}
+        onSubmit={handleImportCsv}
+        loading={actionLoading === 'import-csv'}
+        errorMessage={importError}
+        result={importResult}
+        onResetFeedback={clearImportFeedback}
+      />
     </div>
   )
+}
+
+export function CitasTab() {
+  const citasState = useCitas()
+
+  return <CitasAgendaView {...citasState} />
 }

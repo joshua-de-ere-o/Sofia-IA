@@ -4,6 +4,8 @@ import { createClient } from "jsr:@supabase/supabase-js";
 // Imports locales (dentro del mismo directorio — Deno los resuelve correctamente)
 import { SYSTEM_PROMPT, TOOLS, MODEL_CONFIG } from "./config.ts";
 import { getModelAdapter } from "./model-adapter.ts";
+import { appendForcedReminderHistory } from "./forced-reminder-history.ts";
+import { matchesReminderKeyword } from "./reminder-routing.ts";
 import {
   executeConsultarDisponibilidad,
   executeCalcularPrecio,
@@ -24,9 +26,6 @@ const corsHeaders = {
   'Access-Control-Allow-Origin': '*',
   'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type',
 };
-
-// Regex for deterministic keyword detection (pre-LLM hook — PR 2)
-const RECORDATORIOS_REGEX = /\brecordatorios\b/i;
 
 // Diccionario de ejecutores
 const toolExecutors: Record<string, (args: any, ctx: any) => Promise<string>> = {
@@ -219,7 +218,7 @@ Deno.serve(async (req: Request) => {
     // entering the agentic loop — the LLM sees the tool result and continues
     // the multi-turn collection naturally.
     let forcedToolCall: { name: string; input: Record<string, any> } | null = null;
-    if (RECORDATORIOS_REGEX.test(text)) {
+    if (matchesReminderKeyword(text)) {
       console.log(`[Agent-Runner] RECORDATORIOS keyword detected for ${senderNumber}`);
       forcedToolCall = {
         name: "iniciar_actualizacion_datos",
@@ -272,23 +271,15 @@ Deno.serve(async (req: Request) => {
       };
       const toolResultStr = await toolExecutors[forcedToolCall.name](forcedToolCall.input, ctx);
 
-      history.push({
-        role: "assistant",
-        content: "",
-        tool_calls: [{
-          id: syntheticId,
-          name: forcedToolCall.name,
-          input: forcedToolCall.input,
-        }],
+      appendForcedReminderHistory({
+        provider: adapter.provider,
+        history,
+        toolName: forcedToolCall.name,
+        toolInput: forcedToolCall.input,
+        toolResult: toolResultStr,
+        syntheticId,
       });
-      history.push({
-        role: "tool",
-        name: forcedToolCall.name,
-        tool_call_id: syntheticId,
-        tool_use_id: syntheticId,
-        content: toolResultStr,
-      });
-      console.log(`[Agent-Runner] Forced tool ${forcedToolCall.name} injected into history.`);
+      console.log(`[Agent-Runner] Forced tool ${forcedToolCall.name} applied using ${adapter.provider} history strategy.`);
     }
 
     // 4. Iniciar el Loop Agéntico (máximo 5 iteraciones de herramientas para evitar loops infinitos)

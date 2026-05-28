@@ -1,7 +1,9 @@
 'use server'
 
 import { createServerSupabaseClient } from '@/lib/supabase-server'
+import { createAdminSupabaseClient } from '@/lib/supabase-admin'
 import { createManualAppointmentRecord } from '@/lib/manual-appointment'
+import { importAppointmentsIntoCrm } from '@/lib/appointment-import'
 import {
   validateExcepcionInput,
   expandDateRange,
@@ -284,6 +286,40 @@ export async function verificarPago(cita_id) {
 export async function createManualAppointment(input) {
   const supabase = await createServerSupabaseClient()
   return createManualAppointmentRecord(supabase, input)
+}
+
+/**
+ * Import appointments from a CSV file into the live CRM source.
+ */
+export async function importAppointmentsCsv(formData) {
+  const authSupabase = await createServerSupabaseClient()
+  const { data: { user }, error: userError } = await authSupabase.auth.getUser()
+
+  if (userError || !user) {
+    return { error: 'Tu sesión expiró. Volvé a entrar para importar citas.' }
+  }
+
+  const file = formData?.get('file')
+  if (!file || typeof file.text !== 'function') {
+    return { error: 'Adjuntá un archivo CSV válido.' }
+  }
+
+  const csvText = await file.text()
+  const defaults = {
+    service: String(formData.get('service') ?? ''),
+    modalidad: String(formData.get('modalidad') ?? ''),
+    zona: String(formData.get('zona') ?? ''),
+    estado: String(formData.get('estado') ?? ''),
+    motivo: String(formData.get('motivo') ?? ''),
+  }
+
+  const adminSupabase = createAdminSupabaseClient()
+  return importAppointmentsIntoCrm(adminSupabase, {
+    csvText,
+    defaults,
+    actorUserId: user.id,
+    sourceFileName: file.name || 'appointments.csv',
+  })
 }
 
 /**
