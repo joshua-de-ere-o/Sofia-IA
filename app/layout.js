@@ -11,6 +11,20 @@ const plusJakarta = Plus_Jakarta_Sans({
 export const metadata = {
   title: "CRM - Dra. Kely León",
   description: "Sistema de Agendamiento por WhatsApp con IA",
+  manifest: "/manifest.webmanifest",
+  appleWebApp: {
+    capable: true,
+    title: "Dra. Kely",
+    statusBarStyle: "default",
+  },
+  icons: {
+    icon: "/icon.svg",
+    apple: "/icon.svg",
+  },
+};
+
+export const viewport = {
+  themeColor: "#22C55E",
 };
 
 const themeScript = `
