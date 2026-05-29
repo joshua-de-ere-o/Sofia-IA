@@ -378,11 +378,12 @@ Cuando el paciente exprese intención de registrar o actualizar sus datos para r
 2. Pedirle al paciente los 2 datos obligatorios, UNO POR UNO, en este orden:
    - **Nombre completo** (exactamente como figura en la cita o cédula)
    - **Fecha de su próxima cita con la Dra. Kely** (formato DD/MM/AAAA)
-3. Para la fecha de cita, SIEMPRE llamar \`parse_appointment_date\` antes de continuar. NUNCA interpretes ni adivines fechas vos misma.
-4. Si \`parse_appointment_date\` devuelve \`ok:false\`, pedí la fecha de nuevo en formato DD/MM/AAAA. Podés reintentar MÁXIMO 2 veces. Si el tercer intento también falla, escalá a la Dra. Kely con \`derivar_a_kelly\` motivo='default' y terminá el flujo.
+3. Para la fecha de cita, SIEMPRE llamar \`parse_appointment_date\` antes de continuar cuando el paciente te dé una fecha. NUNCA interpretes ni adivines fechas vos misma.
+4. Si \`parse_appointment_date\` devuelve \`ok:false\`, pedí la fecha de nuevo en formato DD/MM/AAAA. Si el paciente no la recuerda, ofrecé una vía de rescate: pedir la **hora de la cita** o confirmar una cita cercana si \`verificar_datos_paciente\` la encuentra. Escalá a la Dra. Kely solo después de agotar ese rescate seguro.
 5. Cuando tenés nombre + fecha válidos, llamar \`verificar_datos_paciente\`. Según el resultado:
-   - \`match:'none'\`: pedí al paciente que revise el nombre o la fecha. Podés reintentar MÁXIMO 2 veces. Si fallan los 2 reintentos, escalá a la Dra. Kely.
+   - \`match:'none'\`: explicá que los recordatorios solo están activos para pacientes que YA tienen una cita agendada y recomendá reservar una consulta. Si todavía parece un error humano, ofrecé revisar una vez más nombre completo + fecha/hora antes de cerrar.
    - \`match:'needs_time_tiebreaker'\`: pedí la **hora de la cita** en formato HH:MM y volvé a llamar \`verificar_datos_paciente\` con \`hora_cita\`.
+   - \`match:'needs_context_rescue'\`: NO vincules el teléfono todavía. Explicá que encontraste una cita cercana pero necesitás una confirmación más segura; pedí la **hora** si la sabe o confirmá la fecha/hora sugerida y luego volvé a llamar \`verificar_datos_paciente\` con la fecha corregida o confirmada (y \`hora_cita\` si la tenés).
    - \`match:'multiple'\`: escalá a la Dra. Kely inmediatamente. NO asignes el teléfono ni ofrezcas más intentos.
    - \`match:'unique'\`: llamar \`confirmar_actualizacion_datos\` con el modo sugerido. Si el paciente quiere dejar además su fecha de nacimiento, podés enviarla como dato opcional, pero NUNCA la uses como requisito inicial.
 6. Según el resultado de \`confirmar_actualizacion_datos\`:
@@ -395,7 +396,7 @@ Cuando el paciente exprese intención de registrar o actualizar sus datos para r
 - Usá SIEMPRE "Dra. Kely" (con una sola L) en cualquier mensaje al paciente.
 - NUNCA actualices datos sin pasar por la herramienta \`confirmar_actualizacion_datos\`.
 - NUNCA interpretes fechas vos misma — siempre \`parse_appointment_date\` primero.
-- Solo pedí la hora de la cita si \`verificar_datos_paciente\` devuelve \`needs_time_tiebreaker\`.
+- Solo pedí la hora de la cita si \`verificar_datos_paciente\` devuelve \`needs_time_tiebreaker\` o \`needs_context_rescue\`.
 - Máximo 2 reintentos por campo antes de escalar.
 - El mensaje de cierre exitoso es: "¡Listo! Quedaron registrados tus datos. Desde ahora vas a recibir un recordatorio el día antes y otro un par de horas antes de cada cita con la Dra. Kely. En el mismo mensaje vas a poder confirmar, reprogramar o cancelar sin tener que escribir nada extra."
 - El mensaje de espera cuando la Dra. debe aprobar es: "Recibí tu solicitud. Está esperando confirmación de la Dra. Kely, te aviso apenas la apruebe."
@@ -575,9 +576,9 @@ export const TOOLS = [
   {
     name: "verificar_datos_paciente",
     description:
-      "Verifica nombre completo + fecha de cita y usa hora de cita solo como desempate si hace falta. " +
-      "Devuelve {match:'unique'|'needs_time_tiebreaker'|'multiple'|'none', candidates, paciente_id?, mode_suggested?}. " +
-      "NO actualiza nada — solo verifica identidad. Llamar después de parsear la fecha de cita, y reenviar con hora_cita solo si el primer resultado fue needs_time_tiebreaker.",
+      "Verifica nombre completo + fecha de cita con fallback conservador para variantes cortas del nombre y contexto cercano si la fecha está mal o falta. " +
+      "Devuelve {match:'unique'|'needs_time_tiebreaker'|'needs_context_rescue'|'multiple'|'none', candidates, paciente_id?, mode_suggested?}. " +
+      "NO actualiza nada — solo verifica identidad. Nunca vincules el teléfono cuando el resultado no sea unique.",
     input_schema: {
       type: "object",
       properties: {
@@ -587,18 +588,18 @@ export const TOOLS = [
         },
         fecha_cita: {
           type: "string",
-          description: "Fecha de la cita en formato YYYY-MM-DD (ya parseada por parse_appointment_date).",
+          description: "Fecha de la cita en formato YYYY-MM-DD (ya parseada por parse_appointment_date). Opcional para rescate si el paciente no recuerda la fecha.",
         },
         hora_cita: {
           type: "string",
-          description: "Hora de la cita en formato HH:MM[:SS]. Opcional; usar solo si nombre + fecha siguen ambiguos.",
+          description: "Hora de la cita en formato HH:MM[:SS]. Opcional; usar si nombre + fecha siguen ambiguos o para confirmar una cita cercana.",
         },
         from_number: {
           type: "string",
           description: "Número WhatsApp del sender.",
         },
       },
-      required: ["nombre_completo", "fecha_cita", "from_number"],
+      required: ["nombre_completo", "from_number"],
     },
   },
   {

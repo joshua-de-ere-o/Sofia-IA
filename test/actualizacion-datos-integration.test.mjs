@@ -143,7 +143,40 @@ describe('S2b — ambiguous match asks for appointment time only when needed', (
       p_nombre: 'María García López',
       p_fecha_cita: '2026-06-15',
       p_hora_cita: '11:00:00',
+      p_allow_nearby: false,
     })
+  })
+})
+
+describe('S2c — rescue path for wrong or forgotten appointment date', () => {
+  it('returns needs_context_rescue instead of dead-ending when a nearby appointment exists', async () => {
+    const supabaseRpc = {
+      rpc: vi.fn(async (_fn, args) => ({
+        data: args.p_allow_nearby
+          ? [{ id: 'pac-uuid-s2c', nombre: 'María García López', telefono: null, fecha: '2026-06-16', hora: '11:00:00', score: 0.6 }]
+          : [],
+        error: null,
+      })),
+    }
+
+    const verifyResult = await verificarDatosPaciente(
+      { nombre_completo: 'María García López', fecha_cita: '2026-06-15', from_number: '+593987654321' },
+      supabaseRpc
+    )
+
+    expect(verifyResult.match).toBe('needs_context_rescue')
+    expect(verifyResult.candidates[0].fecha).toBe('2026-06-16')
+  })
+
+  it('returns none with no_relevant_appointment when no booked appointment can be found', async () => {
+    const supabaseRpc = makeRpcMock([])
+    const verifyResult = await verificarDatosPaciente(
+      { nombre_completo: 'Paciente Sin Cita', from_number: '+593987654399' },
+      supabaseRpc
+    )
+
+    expect(verifyResult.match).toBe('none')
+    expect(verifyResult.reason).toBe('no_relevant_appointment')
   })
 })
 

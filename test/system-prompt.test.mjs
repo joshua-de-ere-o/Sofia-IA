@@ -120,8 +120,14 @@ describe('SYSTEM_PROMPT — recordatorios linking contract', () => {
     expect(prompt).toContain('hora de la cita')
   })
 
-  it('does not require fecha_nacimiento in verificar_datos_paciente schema', () => {
+  it('supports rescue when the date is wrong or forgotten', () => {
+    expect(prompt).toContain('needs_context_rescue')
+    expect(prompt).toContain('cita cercana')
+    expect(prompt).toContain('recordatorios solo están activos para pacientes que YA tienen una cita agendada')
+  })
+
+  it('does not require fecha_cita in verificar_datos_paciente schema', () => {
     expect(content).toContain('hora_cita')
-    expect(content).toContain('required: ["nombre_completo", "fecha_cita", "from_number"]')
+    expect(content).toContain('required: ["nombre_completo", "from_number"]')
   })
 })
