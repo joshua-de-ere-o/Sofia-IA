@@ -60,6 +60,29 @@ export const DERIVACION_TEMPLATES: Record<string, string> = {
 
 export const DERIVACION_MOTIVOS: string[] = Object.keys(DERIVACION_TEMPLATES);
 
+// ─── Handoff WhatsApp pre-fills ───────────────────────────────────────────────
+// Texto que aparece pre-cargado cuando Kely toca el botón "Escribir al paciente"
+// desde el Telegram de handoff. Una entrada por motivo (claves de DERIVACION_TEMPLATES).
+// El default cubre cualquier motivo no listado.
+export const HANDOFF_WA_PRESETS: Record<string, string> = {
+  reduccion_medidas:
+    'Hola 👋 Soy la Dra. Kely León. Sofía me comentó tu interés en uno de nuestros programas especiales y quería escribirte personalmente para orientarte mejor según tu caso y objetivos.',
+  taller_empresarial:
+    'Hola 👋 Soy la Dra. Kely León. Sofía me comentó tu interés en uno de nuestros programas especiales y quería escribirte personalmente para orientarte mejor según tu caso y objetivos.',
+  caso_clinico_complejo:
+    'Hola 😊 Soy la Dra. Kely León. Sofía me compartió tu información y quería continuar personalmente la conversación para orientarte de forma más adecuada según tu situación actual.',
+  medicacion:
+    'Hola 😊 Soy la Dra. Kely León. Sofía me compartió tu información y quería continuar personalmente la conversación para orientarte de forma más adecuada según tu situación actual.',
+  pago_disputa:
+    'Hola 👋 Soy la Dra. Kely León. Vi el inconveniente relacionado con tu pago y quería ayudarte personalmente para revisarlo juntos y encontrar una solución.',
+  urgencia:
+    'Hola, soy la Dra. Kely León. Sofía me notificó tu mensaje y quise escribirte personalmente para poder entender mejor tu situación y ayudarte lo antes posible.',
+  cancelacion_tardia:
+    'Hola 😊\nSoy la Dra. Kely León. Sofía me avisó que no podrás asistir hoy.\n\nNo te preocupes, quería escribirte personalmente para entender qué ocurrió y ver cómo podemos manejar tu cita.',
+  default:
+    'Hola 😊 Soy la Dra. Kely León. Sofía me derivó tu mensaje para poder ayudarte personalmente y darte una mejor orientación según lo que necesitas.',
+};
+
 // ─── Derived enums (built once at module load) ────────────────────────────────
 export function getServicio(id: string): Servicio | null {
   return CATALOGO_SERVICIOS[id] ?? null;

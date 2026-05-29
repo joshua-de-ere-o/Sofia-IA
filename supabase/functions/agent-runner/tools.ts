@@ -1,5 +1,5 @@
 import { createClient } from "jsr:@supabase/supabase-js";
-import { getServicio, SERVICIO_IDS_TODOS, DERIVACION_TEMPLATES } from "./config.ts";
+import { getServicio, SERVICIO_IDS_TODOS, DERIVACION_TEMPLATES, HANDOFF_WA_PRESETS } from "./config.ts";
 import { normalizeAmount, amountMatches } from "./amount.ts";
 import { logPaymentEvent } from "./log.ts";
 import { notifyKelyText } from "./telegram-notify.ts";
@@ -359,24 +359,31 @@ export async function executeDerivarAKelly(args: any, context: any): Promise<str
         .single();
     }
 
-    // 3. Notify via Telegram
+    // 3. Notify via Telegram — mensaje compacto + botón directo a WhatsApp
     const telegramToken = Deno.env.get("TELEGRAM_BOT_TOKEN");
     const chatId = Deno.env.get("TELEGRAM_CHAT_ID");
 
     if (telegramToken && chatId) {
-      const url = `https://api.telegram.org/bot${telegramToken}/sendMessage`;
-      const txt = `
-🚨 <b>ALERTA DE HANDOFF</b> 🚨
-<b>Paciente:</b> ${senderNumber}
-<b>Nivel:</b> ${nivel_urgencia}
+      // Nombre del paciente (best effort — si falla, fallback al teléfono)
+      let nombrePaciente: string | null = null;
+      if (paciente_id) {
+        const { data: p } = await supabase
+          .from('pacientes')
+          .select('nombre')
+          .eq('id', paciente_id)
+          .maybeSingle();
+        nombrePaciente = p?.nombre ?? null;
+      }
+      const displayName = nombrePaciente || senderNumber || 'paciente';
 
-<b>Motivo:</b> ${motivo}
-<b>Contexto IA:</b> ${historial_resumido}
+      // Pre-fill por motivo (con fallback a default)
+      const presetText = HANDOFF_WA_PRESETS[motivo as string] ?? HANDOFF_WA_PRESETS['default'];
+      const phoneE164 = (senderNumber || '').replace(/^\+/, '');
+      const waMeUrl = `https://wa.me/${phoneE164}?text=${encodeURIComponent(presetText)}`;
 
-Por favor, contesta a este paciente desde tu WhatsApp Business oficial ahora.
-`.trim();
+      const txt = `🔔 <b>Handoff — ${displayName}</b>\n${motivo} · ${nivel_urgencia || 'medio'}\n\n${historial_resumido}`;
 
-      await fetch(url, {
+      await fetch(`https://api.telegram.org/bot${telegramToken}/sendMessage`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -384,11 +391,12 @@ Por favor, contesta a este paciente desde tu WhatsApp Business oficial ahora.
           text: txt,
           parse_mode: "HTML",
           reply_markup: {
-            inline_keyboard: [
-              [{ text: "✅ Terminé la atención (Retomar IA)", callback_data: `handoff_done_${conversacion_id || 'none'}` }]
-            ]
-          }
-        })
+            inline_keyboard: [[
+              { text: "💬 Escribir al paciente", url: waMeUrl },
+              { text: "✅ Listo", callback_data: `handoff_done_${conversacion_id || 'none'}` },
+            ]],
+          },
+        }),
       });
     }
 
