@@ -435,27 +435,23 @@ Deno.serve(async (req: Request) => {
     const serviceRoleKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") ?? "";
     const supabase = createClient(supabaseUrl, serviceRoleKey);
 
-    // El cron ahora corre cada 10 min. Los jobs que consumen Anthropic Batch API
-    // (recordatorios 24h/2h + no-shows) se gatean a minuto :00 para mantener el
-    // costo igual al esquema horario anterior. Tareas y resumen corren siempre.
+    // El cron corre cada 10 min. Todos los jobs corren en cada tick:
+    //  - Recordatorios 24h/2h: usan templates aprobados (no consumen Anthropic),
+    //    y la ventana fina de selección en reminder-selection.ts asegura que
+    //    cada cita reciba el recordatorio exactamente una vez. Hace falta correr
+    //    cada 10min para cubrir citas en HH:00, HH:10, HH:20, HH:30, etc.
+    //  - Confirmación de asistencia: delay máximo respecto a hora de cita + 15min
+    //    de gracia ≈ 10min, aceptable para Kely.
+    //  - Tareas y resumen matutino: idem.
     const { minute } = toGuayaquilParts(nowGuayaquil());
-    const esTopDeHora = minute === 0;
+    console.log(`[Recordatorios] Tick — minuto Quito ${minute}`);
 
-    console.log(`[Recordatorios] Tick — minuto Quito ${minute}, topDeHora=${esTopDeHora}`);
-
-    const jobs: Promise<void>[] = [
+    await Promise.all([
       procesarTareas(supabase),
       procesarResumenMatutino(supabase),
-      // Confirmación de asistencia: corre cada 10 min — no consume Anthropic
-      // Batch, sólo Telegram. El delay máximo respecto a la hora de cita + 15
-      // min es ~10 min, lo cual es aceptable para Kely.
       procesarConfirmacionAsistencia(supabase),
-    ];
-    if (esTopDeHora) {
-      jobs.push(procesarRecordatoriosCitas(supabase));
-    }
-
-    await Promise.all(jobs);
+      procesarRecordatoriosCitas(supabase),
+    ]);
 
     console.log("[Recordatorios] Ejecución completada.");
     return new Response(JSON.stringify({ status: "ok", timestamp: new Date().toISOString() }), {
