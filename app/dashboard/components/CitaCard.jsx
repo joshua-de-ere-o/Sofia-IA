@@ -5,6 +5,7 @@ import { CitaActions } from './CitaActions'
 
 export function CitaCard({ cita, actionLoading, onEstado, onVerificarPago, onReagendar, onOpenVoucher }) {
   const hora = cita.hora?.substring(0, 5)
+  const esBloqueo = cita.estado === 'agenda_bloqueada'
   const modalidadLabel =
     cita.modalidad === 'virtual'
       ? 'Virtual'
@@ -15,9 +16,11 @@ export function CitaCard({ cita, actionLoading, onEstado, onVerificarPago, onRea
       <div className="flex items-start justify-between gap-2">
         <div className="min-w-0 flex-1">
           <p className="truncate text-base font-semibold text-foreground">
-            {cita.paciente?.nombre || 'Sin nombre'}
+            {esBloqueo
+              ? cita.motivo_bloqueo || 'Bloqueo personal'
+              : cita.paciente?.nombre || 'Sin nombre'}
           </p>
-          {cita.paciente?.telefono && (
+          {!esBloqueo && cita.paciente?.telefono && (
             <p className="mt-0.5 flex items-center gap-1 text-xs text-muted-foreground">
               <Phone className="h-3 w-3" />
               {cita.paciente.telefono}
@@ -38,13 +41,15 @@ export function CitaCard({ cita, actionLoading, onEstado, onVerificarPago, onRea
         </div>
       </div>
 
-      <div className="mt-2 text-sm">
-        <p className="font-medium text-foreground">{getServicioLabel(cita.servicio)}</p>
-        <p className="mt-0.5 flex items-center gap-1 text-xs capitalize text-muted-foreground">
-          <MapPin className="h-3 w-3" />
-          {modalidadLabel}
-        </p>
-      </div>
+      {!esBloqueo && (
+        <div className="mt-2 text-sm">
+          <p className="font-medium text-foreground">{getServicioLabel(cita.servicio)}</p>
+          <p className="mt-0.5 flex items-center gap-1 text-xs capitalize text-muted-foreground">
+            <MapPin className="h-3 w-3" />
+            {modalidadLabel}
+          </p>
+        </div>
+      )}
 
       <div className="mt-3 flex justify-end border-t pt-3">
         <CitaActions

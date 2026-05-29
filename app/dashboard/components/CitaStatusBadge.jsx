@@ -26,6 +26,11 @@ const STATUS_CONFIG = {
     className: 'text-red-700 dark:text-red-400 border-red-200',
     variant: 'outline',
   },
+  agenda_bloqueada: {
+    label: '🔒 Bloqueo',
+    className: 'bg-slate-200 dark:bg-slate-700 text-slate-700 dark:text-slate-300',
+    variant: 'outline',
+  },
 }
 
 export function CitaStatusBadge({ estado }) {
