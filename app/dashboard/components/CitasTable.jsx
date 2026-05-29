@@ -31,16 +31,26 @@ export function CitasTable({ citas, actionLoading, onEstado, onVerificarPago, on
                   <div className="text-xs text-muted-foreground">{cita.hora?.substring(0, 5)}</div>
                 </TableCell>
                 <TableCell>
-                  <div>{cita.paciente?.nombre}</div>
-                  <div className="text-xs text-muted-foreground">{cita.paciente?.telefono}</div>
+                  {cita.estado === 'agenda_bloqueada' ? (
+                    <div className="text-muted-foreground">{cita.motivo_bloqueo || 'Bloqueo personal'}</div>
+                  ) : (
+                    <>
+                      <div>{cita.paciente?.nombre}</div>
+                      <div className="text-xs text-muted-foreground">{cita.paciente?.telefono}</div>
+                    </>
+                  )}
                 </TableCell>
                 <TableCell>
-                  <div className="flex flex-col">
-                    <span className="text-sm">{getServicioLabel(cita.servicio)}</span>
-                    <span className="text-xs text-muted-foreground capitalize">
-                      {cita.modalidad} {cita.modalidad !== 'virtual' ? `(${cita.paciente?.zona})` : ''}
-                    </span>
-                  </div>
+                  {cita.estado === 'agenda_bloqueada' ? (
+                    <span className="text-sm text-muted-foreground">Tiempo bloqueado</span>
+                  ) : (
+                    <div className="flex flex-col">
+                      <span className="text-sm">{getServicioLabel(cita.servicio)}</span>
+                      <span className="text-xs text-muted-foreground capitalize">
+                        {cita.modalidad} {cita.modalidad !== 'virtual' ? `(${cita.paciente?.zona})` : ''}
+                      </span>
+                    </div>
+                  )}
                 </TableCell>
                 <TableCell>
                   <CitaStatusBadge estado={cita.estado} />

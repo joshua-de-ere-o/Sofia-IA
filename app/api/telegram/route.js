@@ -168,13 +168,15 @@ Tools disponibles:
 - reagendar_cita_kelly { "nombre_paciente": str, "nueva_fecha": "YYYY-MM-DD", "nueva_hora": "HH:MM", "fecha_actual"?: "YYYY-MM-DD" }
 - cancelar_cita_kelly { "nombre_paciente": str, "fecha"?: "YYYY-MM-DD" }
 - crear_bloqueo_agenda { "fecha": "YYYY-MM-DD", "hora": "HH:MM", "duracion_min": int, "motivo": str }
+- agendar_evento_personal { "motivo": str, "fecha": "YYYY-MM-DD", "hora": "HH:MM", "duracion_min"?: int, "recordar_min_antes"?: int }
 - crear_tarea { "descripcion": str, "fecha_hora_iso": "YYYY-MM-DDTHH:MM:SS-05:00" }
 - responder_texto { "texto": str }  // para aclaraciones, preguntas a Kely, saludo del día
 
 Reglas:
 - Si falta info para una destructiva (ej. duracion_min en bloqueo, hora exacta), usa responder_texto con la pregunta.
 - Si la intención no encaja, usa crear_tarea y avisa con responder_texto que lo guardas como recordatorio.
-- crear_bloqueo_agenda: duracion_min es OBLIGATORIO. Si Kely no la dijo, preguntá con responder_texto.`;
+- crear_bloqueo_agenda: bloqueo simple de tiempo SIN recordatorio. duracion_min es OBLIGATORIO; si Kely no la dijo, preguntá con responder_texto.
+- agendar_evento_personal: para un evento PROPIO de Kely en su agenda (ej. "agendá mi visita al odontólogo a las 15:00", "anotame reunión el viernes 10am"). Bloquea su agenda a esa hora Y le programa un recordatorio. Si NO dice duración, asumí 60 min (no preguntes). Si NO dice con cuánta anticipación avisar, asumí 30 min antes (no preguntes). Si pide "sin recordatorio", pasá recordar_min_antes: 0.`;
 
 function guayaquilParts() {
   const now = new Date();
@@ -253,6 +255,7 @@ async function handleKellyMessage(text) {
       case 'reagendar_cita_kelly': return await toolReagendarCita(args);
       case 'cancelar_cita_kelly':  return await toolCancelarCita(args);
       case 'crear_bloqueo_agenda': return await toolCrearBloqueo(args);
+      case 'agendar_evento_personal': return await toolAgendarEventoPersonal(args);
       case 'crear_tarea':          return await toolCrearTarea(args);
       case 'responder_texto':      return await sendToKely(args.texto || '…');
       default:
@@ -500,6 +503,62 @@ async function toolCrearBloqueo({ fecha, hora, duracion_min, motivo }) {
   await sendToKelyWithButtons(cuerpo, [
     [
       { text: '✅ Sí, bloquear', callback_data: `kelly_confirm_${pending.id}` },
+      { text: '❌ No', callback_data: `kelly_cancel_${pending.id}` },
+    ],
+  ]);
+}
+
+// Fila de bloqueo de agenda. servicio y modalidad son NOT NULL en `citas`, así que
+// se rellenan con valores fijos para bloqueos (no son citas de paciente reales).
+function buildBloqueoRow({ fecha, hora, duracion_min, motivo }) {
+  return {
+    paciente_id: null,
+    fecha,
+    hora,
+    duracion_min,
+    servicio: 'bloqueo_personal',
+    modalidad: 'presencial',
+    motivo_bloqueo: motivo,
+    estado: 'agenda_bloqueada',
+  };
+}
+
+// Hora de disparo del recordatorio = evento (hora Guayaquil, UTC-5) menos los
+// minutos de anticipación. Devuelve ISO en UTC para guardar en tareas.fecha_hora.
+function computeRecordatorioIso(fecha, hora, minAntes) {
+  const evento = new Date(`${fecha}T${hora.slice(0, 5)}:00-05:00`);
+  return new Date(evento.getTime() - minAntes * 60 * 1000).toISOString();
+}
+
+async function toolAgendarEventoPersonal({ motivo, fecha, hora, duracion_min, recordar_min_antes }) {
+  if (!motivo || !fecha || !hora) {
+    return sendToKely('⚠️ Necesito qué es el evento, la fecha y la hora.');
+  }
+  const duracion = Number(duracion_min) > 0 ? Number(duracion_min) : 60;
+  const recordar =
+    recordar_min_antes === undefined || recordar_min_antes === null
+      ? 30
+      : Math.max(0, Number(recordar_min_antes) || 0);
+
+  const { data: pending, error } = await supabase
+    .from('pending_kelly_actions')
+    .insert({
+      action_type: 'evento_personal',
+      args: { fecha, hora, duracion_min: duracion, motivo, recordar_min_antes: recordar },
+    })
+    .select('id')
+    .single();
+  if (error) throw error;
+
+  const cuerpo = [
+    `🗓️ Evento personal:`,
+    motivo,
+    `${fecha} ${hora} — ${duracion} min`,
+    recordar > 0 ? `Recordatorio: ${recordar} min antes` : 'Sin recordatorio',
+  ].join('\n');
+  await sendToKelyWithButtons(cuerpo, [
+    [
+      { text: '✅ Sí, agendar', callback_data: `kelly_confirm_${pending.id}` },
       { text: '❌ No', callback_data: `kelly_cancel_${pending.id}` },
     ],
   ]);
@@ -837,14 +896,23 @@ async function resolveKellyPending(pendingId, confirmar) {
       const { fecha, hora, duracion_min, motivo } = pending.args;
       const { error: e } = await supabase
         .from('citas')
-        .insert({
-          paciente_id: null,
-          fecha, hora,
-          duracion_min,
-          motivo_bloqueo: motivo,
-          estado: 'agenda_bloqueada',
-        });
+        .insert(buildBloqueoRow({ fecha, hora, duracion_min, motivo }));
       if (e) throw e;
+    } else if (pending.action_type === 'evento_personal') {
+      const { fecha, hora, duracion_min, motivo, recordar_min_antes } = pending.args;
+      // 1. Bloquea la agenda en ese horario
+      const { error: eBloqueo } = await supabase
+        .from('citas')
+        .insert(buildBloqueoRow({ fecha, hora, duracion_min, motivo }));
+      if (eBloqueo) throw eBloqueo;
+      // 2. Programa el recordatorio (default 30 min antes; 0 = sin recordatorio)
+      if (recordar_min_antes > 0) {
+        const recordatorioIso = computeRecordatorioIso(fecha, hora, recordar_min_antes);
+        const { error: eTarea } = await supabase
+          .from('tareas')
+          .insert({ descripcion: `${motivo} (${hora})`, fecha_hora: recordatorioIso });
+        if (eTarea) throw eTarea;
+      }
     } else {
       return { toast: '⚠️ Tipo desconocido.', label: '⚠️ Tipo desconocido' };
     }
