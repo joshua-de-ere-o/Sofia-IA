@@ -36,12 +36,17 @@ function toGuayaquilParts(d: Date): {
   };
 }
 
-async function sendWhatsApp(to: string, text: string): Promise<void> {
+/** Envía un template aprobado de WhatsApp vía YCloud. Devuelve true si OK. */
+async function sendWhatsAppTemplate(
+  to: string,
+  templateName: string,
+  variables: string[],
+): Promise<boolean> {
   const apiKey = Deno.env.get("YCLOUD_API_KEY");
   const from = Deno.env.get("YCLOUD_PHONE_NUMBER_ID");
   if (!apiKey || !from) {
     console.error("[Recordatorios] Faltan credenciales de YCloud");
-    return;
+    return false;
   }
   try {
     const res = await fetch("https://api.ycloud.com/v2/whatsapp/messages", {
@@ -53,17 +58,65 @@ async function sendWhatsApp(to: string, text: string): Promise<void> {
       body: JSON.stringify({
         from,
         to,
-        type: "text",
-        text: { body: text },
+        type: "template",
+        template: {
+          name: templateName,
+          language: { code: "es_EC" },
+          components: [
+            {
+              type: "body",
+              parameters: variables.map((v) => ({ type: "text", text: v })),
+            },
+          ],
+        },
       }),
     });
     if (!res.ok) {
       const err = await res.text();
-      console.error(`[Recordatorios] YCloud error para ${to}:`, err);
+      console.error(`[Recordatorios] YCloud error para ${to} (${templateName}):`, err);
+      return false;
     }
+    return true;
   } catch (err) {
     console.error(`[Recordatorios] Error de red enviando a ${to}:`, err);
+    return false;
   }
+}
+
+const DIAS_SEMANA = ["domingo", "lunes", "martes", "miércoles", "jueves", "viernes", "sábado"];
+const MESES = [
+  "enero", "febrero", "marzo", "abril", "mayo", "junio",
+  "julio", "agosto", "septiembre", "octubre", "noviembre", "diciembre",
+];
+
+/** "2026-05-29" → "viernes 29 de mayo". */
+function formatFechaEspanol(fechaISO: string): string {
+  const [y, m, d] = fechaISO.split("-").map((n) => parseInt(n, 10));
+  const dt = new Date(Date.UTC(y, m - 1, d, 12, 0, 0));
+  return `${DIAS_SEMANA[dt.getUTCDay()]} ${d} de ${MESES[dt.getUTCMonth()]}`;
+}
+
+/** "10:30:00" → "10:30". */
+function formatHora(hora: string): string {
+  return (hora || "").slice(0, 5);
+}
+
+const ZONA_LABEL: Record<string, string> = {
+  sur: "Sur",
+  norte: "Norte",
+  valle: "Valle",
+  santo_domingo: "Santo Domingo",
+};
+
+/** Modalidad + zona → string legible para el template. */
+function formatModalidad(modalidad: string, zona: string | null): string {
+  if (modalidad === "virtual") return "virtual por videollamada";
+  if (modalidad === "presencial") {
+    const label = zona ? ZONA_LABEL[zona] : null;
+    return label ? `presencial en consultorio ${label}` : "presencial en consultorio";
+  }
+  if (zona === "domicilio") return "a domicilio";
+  return modalidad;
 }
 
 async function sendTelegram(
@@ -92,115 +145,24 @@ async function sendTelegram(
 }
 
 // ──────────────────────────────────────────────
-// Anthropic Batch API (para los jobs horarios)
-// ──────────────────────────────────────────────
-
-interface BatchRequest {
-  custom_id: string;
-  params: {
-    model: string;
-    max_tokens: number;
-    system: string;
-    messages: { role: string; content: string }[];
-  };
-}
-
-interface TextoBatch {
-  custom_id: string;
-  text: string;
-}
-
-async function generarTextosBatch(requests: BatchRequest[]): Promise<TextoBatch[]> {
-  const apiKey = Deno.env.get("ANTHROPIC_API_KEY");
-  if (!apiKey) throw new Error("ANTHROPIC_API_KEY no configurada");
-
-  const createRes = await fetch("https://api.anthropic.com/v1/messages/batches", {
-    method: "POST",
-    headers: {
-      "x-api-key": apiKey,
-      "anthropic-version": "2023-06-01",
-      "anthropic-beta": "message-batches-2024-09-24",
-      "Content-Type": "application/json",
-    },
-    body: JSON.stringify({ requests }),
-  });
-
-  if (!createRes.ok) {
-    const err = await createRes.text();
-    throw new Error(`Batch API error (create): ${err}`);
-  }
-
-  const batchData = await createRes.json();
-  const batchId: string = batchData.id;
-  console.log(`[Recordatorios] Batch creado: ${batchId}`);
-
-  let attempts = 0;
-  while (attempts < 60) {
-    await new Promise((r) => setTimeout(r, 2000));
-    const statusRes = await fetch(`https://api.anthropic.com/v1/messages/batches/${batchId}`, {
-      headers: {
-        "x-api-key": apiKey,
-        "anthropic-version": "2023-06-01",
-        "anthropic-beta": "message-batches-2024-09-24",
-      },
-    });
-    const statusData = await statusRes.json();
-    if (statusData.processing_status === "ended") {
-      console.log(`[Recordatorios] Batch listo tras ${attempts + 1} intentos`);
-      break;
-    }
-    attempts++;
-  }
-
-  const resultsRes = await fetch(
-    `https://api.anthropic.com/v1/messages/batches/${batchId}/results`,
-    {
-      headers: {
-        "x-api-key": apiKey,
-        "anthropic-version": "2023-06-01",
-        "anthropic-beta": "message-batches-2024-09-24",
-      },
-    }
-  );
-
-  if (!resultsRes.ok) {
-    const err = await resultsRes.text();
-    throw new Error(`Batch API error (results): ${err}`);
-  }
-
-  const resultsText = await resultsRes.text();
-  const textos: TextoBatch[] = [];
-  for (const line of resultsText.split("\n").filter(Boolean)) {
-    try {
-      const item = JSON.parse(line);
-      if (item.result?.type === "succeeded") {
-        const content = item.result.message?.content?.[0]?.text ?? "";
-        textos.push({ custom_id: item.custom_id, text: content });
-      }
-    } catch (_) {
-      // línea mal formada, ignorar
-    }
-  }
-  return textos;
-}
-
-// ──────────────────────────────────────────────
 // Jobs horarios (sólo corren en minuto :00)
 // ──────────────────────────────────────────────
 
-const MODEL = "claude-haiku-4-5-20251001";
-const SYSTEM_RECORDATORIO = `Eres Sofía, la asistente virtual de la Dra. Kely León, nutricionista clínica y deportiva en Quito, Ecuador.
-Redacta UN SOLO mensaje de WhatsApp en español (Ecuador), cálido y profesional.
-No uses asteriscos ni emojis excesivos. Máximo 3 líneas.`;
-
-/** Recordatorios 24h y 2h antes de la cita, reutilizando la selección compartida. */
+/**
+ * Recordatorios 24h y 2h antes de la cita mediante templates aprobados por
+ * Meta en YCloud:
+ *   - recordatorio_cita_24h: {{1}} nombre, {{2}} fecha legible, {{3}} hora, {{4}} modalidad
+ *     Botones: Confirmar asistencia / Reagendar cita / Cancelar cita
+ *   - recordatorio_cita_2h:  {{1}} nombre, {{2}} hora, {{3}} modalidad
+ *     Botones: Confirmar asistencia / No podré asistir
+ */
 async function procesarRecordatoriosCitas(supabase: ReturnType<typeof createClient>): Promise<void> {
   const now = nowGuayaquil();
 
   const { data: citas, error } = await supabase
     .from("citas")
     .select(`
-      id, fecha, hora, modalidad, zona, servicio,
+      id, fecha, hora, modalidad, zona, servicio, estado,
       reminder_24h_sent, reminder_2h_sent,
       pacientes!inner(nombre, telefono)
     `)
@@ -221,46 +183,22 @@ async function procesarRecordatoriosCitas(supabase: ReturnType<typeof createClie
     return;
   }
 
-  const batchRequests: BatchRequest[] = reminders.map((reminder) => ({
-    custom_id: `${reminder.reminderType}_${reminder.citaId}`,
-    params: {
-      model: MODEL,
-      max_tokens: reminder.reminderType === "24h" ? 150 : 100,
-      system: SYSTEM_RECORDATORIO,
-      messages: [
-        {
-          role: "user",
-          content: reminder.reminderType === "24h"
-            ? `Redacta el recordatorio de 24 horas para ${reminder.nombre}.\nFecha: ${reminder.fecha}, Hora: ${reminder.hora}, Modalidad: ${reminder.modalidad}, Servicio: ${reminder.servicio ?? "consulta"}.`
-            : `Redacta el recordatorio de 2 horas para ${reminder.nombre}.\nHora: ${reminder.hora}, Modalidad: ${reminder.modalidad}.`,
-        },
-      ],
-    },
-  }));
+  for (const reminder of reminders) {
+    const hora = formatHora(reminder.hora);
+    const modalidad = formatModalidad(reminder.modalidad, reminder.zona);
+    const templateName = reminder.reminderType === "24h"
+      ? "recordatorio_cita_24h"
+      : "recordatorio_cita_2h";
+    const variables = reminder.reminderType === "24h"
+      ? [reminder.nombre, formatFechaEspanol(reminder.fecha), hora, modalidad]
+      : [reminder.nombre, hora, modalidad];
 
-  console.log(`[Recordatorios] Procesando batch de ${batchRequests.length} recordatorios...`);
-
-  let textos: TextoBatch[] = [];
-  try {
-    textos = await generarTextosBatch(batchRequests);
-  } catch (err) {
-    console.error("[Recordatorios] Error en Batch API:", err);
-    return;
-  }
-
-  for (const { custom_id, text } of textos) {
-    const [tipo, citaId] = custom_id.split("_");
-    const reminder = reminders.find((item) => item.citaId === citaId && item.reminderType === tipo);
-    if (!reminder) continue;
-
-    await sendWhatsApp(reminder.phone, text);
-    console.log(`[Recordatorios] Enviado ${tipo} a ${reminder.phone}`);
-
-    const update: Record<string, boolean> = {};
-    if (tipo === "24h") update.reminder_24h_sent = true;
-    if (tipo === "2h") update.reminder_2h_sent = true;
-
-    await supabase.from("citas").update(update).eq("id", citaId);
+    const ok = await sendWhatsAppTemplate(reminder.phone, templateName, variables);
+    if (ok) {
+      const column = reminder.reminderType === "24h" ? "reminder_24h_sent" : "reminder_2h_sent";
+      await supabase.from("citas").update({ [column]: true }).eq("id", reminder.citaId);
+      console.log(`[Recordatorios] ${reminder.reminderType} enviado a ${reminder.phone} (cita ${reminder.citaId})`);
+    }
   }
 }
 

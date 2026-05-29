@@ -2,6 +2,7 @@ import { createClient } from "jsr:@supabase/supabase-js";
 import { getServicio, SERVICIO_IDS_TODOS, DERIVACION_TEMPLATES } from "./config.ts";
 import { normalizeAmount, amountMatches } from "./amount.ts";
 import { logPaymentEvent } from "./log.ts";
+import { notifyKelyText } from "./telegram-notify.ts";
 import { generateAvailability } from "../../../lib/availability/slot-generator.js";
 // Patient data-update tools (PR 2) — pure logic lives in lib/ for Vitest testability
 import { parseSpanishDate } from "../../../lib/parse-spanish-date.js";
@@ -413,10 +414,10 @@ export async function executeCancelarCita(args: any, context: any): Promise<stri
 
   try {
     const supabase = getSupabase();
-    // Obtener cita futura no cancelada/no_show
+    // Obtener cita futura + datos del paciente para la notificación a Kely
     const { data: cita } = await supabase
       .from("citas")
-      .select("id, fecha, hora")
+      .select("id, fecha, hora, servicio, modalidad, zona, pacientes!inner(nombre, telefono)")
       .eq("paciente_id", paciente_id)
       .in("estado", ["confirmada", "pendiente_pago"])
       .order("fecha", { ascending: true })
@@ -433,14 +434,26 @@ export async function executeCancelarCita(args: any, context: any): Promise<stri
     const isLessThan24h = timeDiffMs < 24 * 60 * 60 * 1000;
 
     if (isLessThan24h) {
-      return JSON.stringify({ 
-        error: "política_incumplida", 
-        mensaje_interno: `Falta menos de 24h para la cita (Quedan ${Math.round(timeDiffMs / 3600000)}h). Informa al paciente que por políticas no puedes cancelarlo tú y transfiérelo usando derivar_a_kelly.` 
+      return JSON.stringify({
+        error: "política_incumplida",
+        mensaje_interno: `Falta menos de 24h para la cita (Quedan ${Math.round(timeDiffMs / 3600000)}h). Informa al paciente que por políticas no puedes cancelarlo tú y transfiérelo usando derivar_a_kelly.`
       });
     }
 
     // Cancelar en DB
     await supabase.from("citas").update({ estado: "cancelada" }).eq("id", cita.id);
+
+    // Notificar a Kely por Telegram — slot liberado
+    const paciente = (cita as any).pacientes;
+    const hora = (cita.hora || "").slice(0, 5);
+    const motivoTxt = motivo ? `\nMotivo: ${motivo}` : "";
+    await notifyKelyText(
+      `❌ <b>Cita cancelada por el paciente</b>\n` +
+      `Paciente: ${paciente?.nombre ?? "—"}\n` +
+      `Tel: ${paciente?.telefono ?? "—"}\n` +
+      `Cita: ${cita.fecha} ${hora} — ${cita.servicio} (${cita.modalidad}${cita.zona ? `, ${cita.zona}` : ""})${motivoTxt}\n` +
+      `El slot quedó liberado.`
+    );
 
     return JSON.stringify({ success: true, mensaje_interno: "Cita cancelada exitosamente. Comunícale la confirmación." });
   } catch (err: any) {
