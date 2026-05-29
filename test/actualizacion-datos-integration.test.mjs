@@ -101,8 +101,9 @@ describe('S2 — natural language trigger', () => {
 
     expect(result.ok).toBe(true)
     expect(result.datos_requeridos).toContain('nombre_completo')
-    expect(result.datos_requeridos).toContain('fecha_nacimiento')
-    expect(result.datos_requeridos).toContain('fecha_proxima_o_ultima_cita')
+    expect(result.datos_requeridos).toContain('fecha_cita')
+    expect(result.datos_requeridos).not.toContain('fecha_nacimiento')
+    expect(result.optional_enrichment).toContain('fecha_nacimiento')
     expect(result.paciente_conocido).toBe(true)
   })
 
@@ -110,6 +111,39 @@ describe('S2 — natural language trigger', () => {
     const { iniciarActualizacionDatos } = await import('../lib/iniciar-actualizacion-datos.js')
     const result = iniciarActualizacionDatos({ trigger: 'llm_intent', paciente_id: null, from_number: '+593000000000' })
     expect(result.paciente_conocido).toBe(false)
+  })
+})
+
+describe('S2b — ambiguous match asks for appointment time only when needed', () => {
+  it('returns needs_time_tiebreaker before time and unique after time is provided', async () => {
+    const ambiguousRpc = makeRpcMock([
+      { id: 'pac-uuid-s2b', nombre: 'María García López', telefono: null, hora: '09:00:00', score: 1 },
+      { id: 'pac-uuid-s2b', nombre: 'María García López', telefono: null, hora: '11:00:00', score: 1 },
+    ])
+
+    const ambiguousResult = await verificarDatosPaciente(
+      { nombre_completo: 'María García López', fecha_cita: '2026-06-15', from_number: '+593987654321' },
+      ambiguousRpc
+    )
+
+    expect(ambiguousResult.match).toBe('needs_time_tiebreaker')
+    expect(ambiguousResult.candidates).toHaveLength(2)
+
+    const uniqueRpc = makeRpcMock([
+      { id: 'pac-uuid-s2b', nombre: 'María García López', telefono: null, hora: '11:00:00', score: 1 },
+    ])
+
+    const uniqueResult = await verificarDatosPaciente(
+      { nombre_completo: 'María García López', fecha_cita: '2026-06-15', hora_cita: '11:00:00', from_number: '+593987654321' },
+      uniqueRpc
+    )
+
+    expect(uniqueResult.match).toBe('unique')
+    expect(uniqueRpc.rpc).toHaveBeenCalledWith('verificar_paciente_match', {
+      p_nombre: 'María García López',
+      p_fecha_cita: '2026-06-15',
+      p_hora_cita: '11:00:00',
+    })
   })
 })
 
@@ -170,7 +204,7 @@ describe('S6 — multiple matches', () => {
       { id: 'uuid-a', nombre: 'Ana López', telefono: null, score: 0.91 },
       { id: 'uuid-b', nombre: 'Ana Lopez', telefono: null, score: 0.87 },
     ]
-    const result = applyMatchDecision(rows, '+593999000001')
+    const result = applyMatchDecision(rows, '+593999000001', { timeProvided: true })
     expect(result.match).toBe('multiple')
     expect(result.candidates).toHaveLength(2)
     // No retry — LLM escalates immediately on multiple

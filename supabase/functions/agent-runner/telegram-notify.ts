@@ -121,6 +121,33 @@ export function buildPaymentCaption(params: {
 }
 
 /**
+ * Lightweight HTML notification to Kely — no buttons, no photo.
+ * Used for events that just need to inform her (cancellations, late changes).
+ * Returns silently if Telegram env vars are missing or the request fails.
+ */
+export async function notifyKelyText(html: string): Promise<void> {
+  const botToken = Deno.env.get("TELEGRAM_BOT_TOKEN");
+  const chatId = Deno.env.get("TELEGRAM_CHAT_ID");
+  if (!botToken || !chatId) {
+    console.error("[Telegram-Notify] Missing TELEGRAM_BOT_TOKEN or TELEGRAM_CHAT_ID");
+    return;
+  }
+  try {
+    await fetch(`https://api.telegram.org/bot${botToken}/sendMessage`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        chat_id: chatId,
+        text: html,
+        parse_mode: "HTML",
+      }),
+    });
+  } catch (e) {
+    console.error("[Telegram-Notify] notifyKelyText error:", e);
+  }
+}
+
+/**
  * Notify Kelly via Telegram about a pending payment approval.
  *
  * Sends a photo message with the receipt image (sendPhoto).

@@ -124,6 +124,44 @@ describe('confirmarActualizacionDatos — auto_update path', () => {
     expect(histInsert.vals.aprobado_por).toBe('sistema')
     expect(histInsert.vals.paciente_id).toBe('pac-uuid-1')
   })
+
+  it('stores the inbound WhatsApp number safely even if telefono_nuevo differs', async () => {
+    const { supabase, updatedRows } = makeSupabaseMock({
+      selectResults: { pacientes: null },
+    })
+
+    await confirmarActualizacionDatos(
+      {
+        paciente_id: 'pac-uuid-1',
+        from_number: '+593999000777',
+        telefono_nuevo: '+593111111111',
+        mode: 'auto_update',
+      },
+      supabase
+    )
+
+    const pacUpdate = updatedRows.find((r) => r.table === 'pacientes')
+    expect(pacUpdate.vals.telefono).toBe('+593999000777')
+  })
+
+  it('does not overwrite birth date when it was not provided', async () => {
+    const { supabase, updatedRows } = makeSupabaseMock({
+      selectResults: { pacientes: null },
+    })
+
+    await confirmarActualizacionDatos(
+      {
+        paciente_id: 'pac-uuid-1',
+        from_number: '+593999000001',
+        telefono_nuevo: '+593999000001',
+        mode: 'auto_update',
+      },
+      supabase
+    )
+
+    const pacUpdate = updatedRows.find((r) => r.table === 'pacientes')
+    expect(pacUpdate.vals).toEqual({ telefono: '+593999000001' })
+  })
 })
 
 describe('confirmarActualizacionDatos — request_approval path', () => {

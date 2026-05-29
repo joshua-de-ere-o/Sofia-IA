@@ -28,12 +28,35 @@ describe('applyMatchDecision — pure decision logic', () => {
     expect(result.match).toBe('none')
   })
 
-  it('returns match:multiple for 2+ rows', () => {
+  it('returns match:multiple for 2+ rows when time was already collected', () => {
     const rows = [
       { id: 'uuid-1', nombre: 'Juan Perez', telefono: null, score: 0.91 },
       { id: 'uuid-2', nombre: 'Juana Perez', telefono: null, score: 0.86 },
     ]
-    const result = applyMatchDecision(rows, '+593999000001')
+    const result = applyMatchDecision(rows, '+593999000001', { timeProvided: true })
+    expect(result.match).toBe('multiple')
+    expect(result.candidates).toHaveLength(2)
+  })
+
+  it('returns match:needs_time_tiebreaker for 2+ rows when time was not provided', () => {
+    const rows = [
+      { id: 'uuid-1', nombre: 'Juan Perez', telefono: null, hora: '09:00:00', score: 1 },
+      { id: 'uuid-2', nombre: 'Juan Perez', telefono: null, hora: '10:00:00', score: 1 },
+    ]
+    const result = applyMatchDecision(rows, '+593999000001', { timeProvided: false })
+    expect(result.match).toBe('needs_time_tiebreaker')
+    expect(result.candidates).toEqual([
+      { id: 'uuid-1', nombre: 'Juan Perez', hora: '09:00:00', score: 1 },
+      { id: 'uuid-2', nombre: 'Juan Perez', hora: '10:00:00', score: 1 },
+    ])
+  })
+
+  it('returns match:multiple for 2+ rows when time was already provided', () => {
+    const rows = [
+      { id: 'uuid-1', nombre: 'Juan Perez', telefono: null, hora: '09:00:00', score: 1 },
+      { id: 'uuid-2', nombre: 'Juan Perez', telefono: null, hora: '09:00:00', score: 1 },
+    ]
+    const result = applyMatchDecision(rows, '+593999000001', { timeProvided: true })
     expect(result.match).toBe('multiple')
     expect(result.candidates).toHaveLength(2)
   })
@@ -93,7 +116,39 @@ describe('verificarDatosPaciente — with mocked RPC', () => {
     })
   })
 
-  it('returns match:multiple when RPC returns 2 rows', async () => {
+  it('passes hora_cita to RPC only when provided and resolves a unique tiebreaker match', async () => {
+    const rows = [{ id: 'uuid-c', nombre: 'Maria Garcia', telefono: null, hora: '09:30:00', score: 1 }]
+    const supabase = makeRpcMock(rows)
+    const result = await verificarDatosPaciente(
+      { nombre_completo: 'Maria Garcia', fecha_cita: '2026-06-05', hora_cita: '09:30:00', from_number: '+593987654321' },
+      supabase
+    )
+
+    expect(result.match).toBe('unique')
+    expect(result.mode_suggested).toBe('auto_update')
+    expect(supabase.rpc).toHaveBeenCalledWith('verificar_paciente_match', {
+      p_nombre: 'Maria Garcia',
+      p_fecha_cita: '2026-06-05',
+      p_hora_cita: '09:30:00',
+    })
+  })
+
+  it('returns needs_time_tiebreaker when name+date still has multiple candidates', async () => {
+    const rows = [
+      { id: 'uuid-a', nombre: 'Ana Lopez', telefono: null, hora: '09:00:00', score: 1 },
+      { id: 'uuid-b', nombre: 'Ana Lopez', telefono: null, hora: '10:00:00', score: 1 },
+    ]
+    const supabase = makeRpcMock(rows)
+    const result = await verificarDatosPaciente(
+      { nombre_completo: 'Ana Lopez', fecha_cita: '2026-06-05', from_number: '+593987654321' },
+      supabase
+    )
+
+    expect(result.match).toBe('needs_time_tiebreaker')
+    expect(result.candidates).toHaveLength(2)
+  })
+
+  it('returns needs_time_tiebreaker when RPC returns 2 rows without hora_cita', async () => {
     const rows = [
       { id: 'uuid-a', nombre: 'Juan P', telefono: null, score: 0.90 },
       { id: 'uuid-b', nombre: 'Juana P', telefono: null, score: 0.86 },
@@ -103,7 +158,7 @@ describe('verificarDatosPaciente — with mocked RPC', () => {
       { nombre_completo: 'Juan P', fecha_cita: '2026-06-01', fecha_nacimiento: '1990-01-01', from_number: '+593999000001' },
       supabase
     )
-    expect(result.match).toBe('multiple')
+    expect(result.match).toBe('needs_time_tiebreaker')
   })
 
   it('returns match:unique + auto_update for a single null-phone match', async () => {

@@ -120,6 +120,19 @@ function normalizeYCloudPayload(raw) {
       }
     }
 
+    // Normalizar respuestas de botones de templates a tipo "text" para que el
+    // agente las procese como texto plano:
+    //   - Quick Reply de template:        m.type === 'button',      m.button.text
+    //   - Interactive button_reply:        m.type === 'interactive', m.interactive.button_reply.title
+    let normalizedText = m.text;
+    if (m.type === 'button' && m.button?.text) {
+      normalizedType = 'text';
+      normalizedText = { body: m.button.text };
+    } else if (m.type === 'interactive' && m.interactive?.button_reply?.title) {
+      normalizedType = 'text';
+      normalizedText = { body: m.interactive.button_reply.title };
+    }
+
     return {
       type: "message.created",
       message: {
@@ -128,7 +141,7 @@ function normalizeYCloudPayload(raw) {
         from: m.from,
         from_me: false,
         type: normalizedType,
-        text: m.text,
+        text: normalizedText,
         image: normalizedImage,
         audio: m.audio,
         video: m.video,
