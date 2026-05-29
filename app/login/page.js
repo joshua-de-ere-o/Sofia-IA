@@ -44,13 +44,24 @@ export default function LoginPage() {
       if (payload?.shouldSendMagicLink) {
         await supabase.auth.signOut({ scope: 'local' })
 
-        await supabase.auth.signInWithOtp({
+        const { error } = await supabase.auth.signInWithOtp({
           email: email.trim().toLowerCase(),
           options: {
             emailRedirectTo: `${window.location.origin}/auth/callback`,
             shouldCreateUser: false,
           },
         })
+
+        if (error) {
+          const isRateLimited = error.status === 429 || error.code === 'over_email_send_rate_limit'
+
+          setMessage(
+            isRateLimited
+              ? 'Demasiados intentos seguidos. Esperá unos minutos antes de pedir otro enlace.'
+              : 'No se pudo enviar el enlace mágico. Inténtalo otra vez.'
+          )
+          return
+        }
       }
 
       setMessage('¡Enlace mágico enviado! Revisa tu correo.')
