@@ -27,10 +27,15 @@ export function DashboardNav() {
     <>
       <aside className="hidden w-64 flex-col border-r bg-card px-4 py-6 md:flex">
         <div className="flex items-center gap-3 px-2 mb-8">
-          <div className="h-8 w-8 rounded-full bg-kely-teal flex items-center justify-center text-kely-green font-bold shadow-sm">
-            K
+          <div className="flex h-10 w-10 items-center justify-center overflow-hidden rounded-xl border border-border/60 bg-white shadow-sm">
+            <img
+              src="/icon.svg"
+              alt=""
+              aria-hidden="true"
+              className="h-full w-full object-cover"
+            />
           </div>
-          <span className="text-lg font-bold text-kely-green tracking-tight">Dra. Kely</span>
+          <span className="text-lg font-bold text-kely-green tracking-tight">Dra. Kely León</span>
         </div>
         
         <nav className="flex-1 space-y-2">
