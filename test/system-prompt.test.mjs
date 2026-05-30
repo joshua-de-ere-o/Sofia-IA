@@ -20,6 +20,7 @@ import { fileURLToPath } from 'url'
 const __dirname = dirname(fileURLToPath(import.meta.url))
 const CONFIG_PATH = resolve(__dirname, '../supabase/functions/agent-runner/config.ts')
 const content = readFileSync(CONFIG_PATH, 'utf-8')
+const telegramRoute = readFileSync(resolve(__dirname, '../app/api/telegram/route.js'), 'utf-8')
 
 // Extract the SYSTEM_PROMPT value (everything between the backtick template literal)
 const match = content.match(/export const SYSTEM_PROMPT\s*=\s*`([\s\S]*?)`;/)
@@ -104,6 +105,63 @@ describe('SYSTEM_PROMPT — REGLA DE ORO and zones still present', () => {
 
   it('shows the reminders option in the new-patient menu', () => {
     expect(prompt).toContain('4️⃣ Actualizar datos para recordatorios')
+  })
+})
+
+// ─── Phase 2: Policy boundary regression ────────────────────────────────────
+//
+// These assertions guard the isolation between the patient WhatsApp lane
+// (strict) and the operator Telegram lane (relaxed). If either lane's rules
+// bleed into the other, a test here will catch it.
+//
+// The canonical policy constants live in lib/actor-policy.js.
+
+describe('SYSTEM_PROMPT — patient lane stays strict (policy boundary)', () => {
+  it('patient prompt contains 24h advance booking language', () => {
+    // The system prompt must surface the 24h constraint to the model
+    expect(prompt).toContain('24')
+  })
+
+  it('patient prompt enforces mandatory data collection order', () => {
+    // Strict data order: name → dob → modality → zone → ...
+    expect(prompt).toContain('ORDEN ESTRICTO DE RECOLECCIÓN')
+  })
+
+  it('patient prompt does NOT contain operator-only override language', () => {
+    // "Cero políticas de paciente" is the operator override statement — must NOT appear in patient prompt
+    expect(prompt).not.toContain('Cero políticas de paciente')
+  })
+
+  it('patient prompt does NOT reference operator tools (reagendar_cita_kelly, cancelar_cita_kelly)', () => {
+    expect(prompt).not.toContain('reagendar_cita_kelly')
+    expect(prompt).not.toContain('cancelar_cita_kelly')
+  })
+})
+
+describe('Telegram route — operator lane is tagged and isolated', () => {
+  it('telegram route file declares actor=operator boundary', () => {
+    expect(telegramRoute).toContain('actor=operator')
+  })
+
+  it('telegram route file references OPERATOR_TELEGRAM_POLICY in comments', () => {
+    expect(telegramRoute).toContain('OPERATOR_TELEGRAM_POLICY')
+  })
+
+  it('KELLY_SYSTEM_PROMPT contains explicit "Cero políticas de paciente" override statement', () => {
+    // Kelly's prompt must say explicitly that patient constraints do NOT apply
+    expect(telegramRoute).toContain('Cero políticas de paciente')
+  })
+
+  it('KELLY_SYSTEM_PROMPT does NOT contain the patient strict ordering phrase', () => {
+    // The strict patient ordering must never bleed into the operator prompt
+    expect(telegramRoute).not.toContain('ORDEN ESTRICTO DE RECOLECCIÓN')
+  })
+
+  it('patient SYSTEM_PROMPT and KELLY_SYSTEM_PROMPT are defined in separate files', () => {
+    // Agent-runner config.ts must not contain Kelly's operator prompt
+    expect(content).not.toContain('Cero políticas de paciente')
+    // Telegram route must not contain the patient Sofía prompt header
+    expect(telegramRoute).not.toContain('REGLA DE ORO DE AGENDAMIENTO')
   })
 })
 

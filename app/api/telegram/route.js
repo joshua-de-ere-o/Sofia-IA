@@ -1,3 +1,15 @@
+/**
+ * app/api/telegram/route.js
+ *
+ * ACTOR / CHANNEL BOUNDARY: actor=operator, channel=telegram
+ * ----------------------------------------------------------
+ * All requests handled here originate from Kelly (the operator) via Telegram.
+ * This route MUST NOT apply patient-WhatsApp constraints (24h/48h windows,
+ * mandatory data requirements, defaults-only-never). Those rules live
+ * exclusively in the patient lane (agent-runner / config.ts).
+ *
+ * Policy reference: lib/actor-policy.js → OPERATOR_TELEGRAM_POLICY
+ */
 import { NextResponse } from 'next/server';
 import { createClient } from '@supabase/supabase-js';
 import { getModelAdapter } from '@/lib/model-adapter';
