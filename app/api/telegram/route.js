@@ -20,6 +20,13 @@ const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL || '';
 const supabaseServiceKey = process.env.SUPABASE_SERVICE_ROLE_KEY || '';
 const supabase = createClient(supabaseUrl, supabaseServiceKey);
 
+/**
+ * @typedef {{ kind: 'clarification', message: string }} OperatorClarification
+ * @typedef {{ kind: 'preview', actionType: string, previewId: string, summary: string, changes: unknown[] }} OperatorPreview
+ * @typedef {{ kind: 'result', status: 'applied' | 'cancelled' | 'failed', message: string }} OperatorResult
+ * @typedef {OperatorClarification | OperatorPreview | OperatorResult} OperatorToolResult
+ */
+
 export async function POST(req) {
   try {
     const update = await req.json();
@@ -68,9 +75,17 @@ async function handleCallbackQuery(callbackQuery) {
     const confirmar = data.startsWith('kelly_confirm_');
     const pendingId = data.replace(confirmar ? 'kelly_confirm_' : 'kelly_cancel_', '');
     if (pendingId && pendingId !== 'none') {
+      /** @type {OperatorResult} */
       const result = await resolveKellyPending(pendingId, confirmar);
-      await answerCallback(callbackQuery, result.toast);
-      await replaceButtons(callbackQuery, result.label);
+      // Map OperatorResult → Telegram toast + button label
+      const toast = result.message;
+      const label = result.status === 'applied'
+        ? '✅ Aplicado'
+        : result.status === 'cancelled'
+          ? '↩️ Cancelado'
+          : '⚠️ Error';
+      await answerCallback(callbackQuery, toast);
+      await replaceButtons(callbackQuery, label);
     }
     return;
   }
@@ -865,6 +880,13 @@ async function handlePaymentReject(pendingId, callbackQuery) {
 
 // ─── Resolución de acciones confirmadas ───────────────────────────────────────
 
+/**
+ * Resolve a pending Kelly action (confirm or cancel).
+ *
+ * @param {string} pendingId
+ * @param {boolean} confirmar
+ * @returns {Promise<OperatorResult>}
+ */
 async function resolveKellyPending(pendingId, confirmar) {
   const { data: pending, error } = await supabase
     .from('pending_kelly_actions')
@@ -873,20 +895,22 @@ async function resolveKellyPending(pendingId, confirmar) {
     .single();
 
   if (error || !pending) {
-    return { toast: '⚠️ Acción no encontrada.', label: '⚠️ No encontrada' };
+    return { kind: 'result', status: 'failed', message: '⚠️ Acción no encontrada.' };
   }
   if (pending.ejecutada) {
-    return { toast: 'ℹ️ Ya estaba aplicada.', label: 'ℹ️ Ya aplicada' };
+    return { kind: 'result', status: 'failed', message: 'ℹ️ Ya estaba aplicada.' };
   }
   if (new Date(pending.expira_at) < new Date()) {
-    return { toast: '⌛ La acción expiró.', label: '⌛ Expirada' };
+    return { kind: 'result', status: 'failed', message: '⌛ La acción expiró.' };
   }
 
   if (!confirmar) {
+    // Atomic cancel: guard against concurrent taps with ejecutada=false filter
     await supabase.from('pending_kelly_actions')
       .update({ ejecutada: true, ejecutada_at: new Date().toISOString() })
-      .eq('id', pendingId);
-    return { toast: '↩️ Cancelado.', label: '↩️ Cancelado' };
+      .eq('id', pendingId)
+      .eq('ejecutada', false);
+    return { kind: 'result', status: 'cancelled', message: '↩️ Cancelado.' };
   }
 
   try {
@@ -912,12 +936,12 @@ async function resolveKellyPending(pendingId, confirmar) {
       if (e) throw e;
     } else if (pending.action_type === 'evento_personal') {
       const { fecha, hora, duracion_min, motivo, recordar_min_antes } = pending.args;
-      // 1. Bloquea la agenda en ese horario
+      // 1. Block the schedule slot
       const { error: eBloqueo } = await supabase
         .from('citas')
         .insert(buildBloqueoRow({ fecha, hora, duracion_min, motivo }));
       if (eBloqueo) throw eBloqueo;
-      // 2. Programa el recordatorio (default 30 min antes; 0 = sin recordatorio)
+      // 2. Schedule reminder (0 = no reminder)
       if (recordar_min_antes > 0) {
         const recordatorioIso = computeRecordatorioIso(fecha, hora, recordar_min_antes);
         const { error: eTarea } = await supabase
@@ -926,16 +950,20 @@ async function resolveKellyPending(pendingId, confirmar) {
         if (eTarea) throw eTarea;
       }
     } else {
-      return { toast: '⚠️ Tipo desconocido.', label: '⚠️ Tipo desconocido' };
+      return { kind: 'result', status: 'failed', message: '⚠️ Tipo desconocido.' };
     }
 
+    // Atomic mark-executed: .eq('ejecutada', false) prevents double-tap mutation
+    // (mirrors the status-guarded UPDATE pattern used in handlePaymentConfirm)
     await supabase.from('pending_kelly_actions')
       .update({ ejecutada: true, ejecutada_at: new Date().toISOString() })
-      .eq('id', pendingId);
-    return { toast: '✅ Aplicado.', label: '✅ Aplicado' };
+      .eq('id', pendingId)
+      .eq('ejecutada', false);
+
+    return { kind: 'result', status: 'applied', message: '✅ Aplicado.' };
   } catch (err) {
     console.error('[Telegram/kelly] Error ejecutando acción:', err?.message || err);
-    return { toast: '⚠️ Falló al aplicar.', label: '⚠️ Falló' };
+    return { kind: 'result', status: 'failed', message: '⚠️ Falló al aplicar.' };
   }
 }
 
