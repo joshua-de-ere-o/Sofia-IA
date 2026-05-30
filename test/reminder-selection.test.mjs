@@ -22,7 +22,7 @@ describe('collectPendingAppointmentReminders', () => {
         },
       },
       // 24h20m antes de la cita — dentro de la ventana nueva [24h10m, 24h40m].
-    ], new Date('2026-06-09T08:40:00'))
+    ], new Date('2026-06-09T08:40:00-05:00'))
 
     expect(reminders).toHaveLength(1)
     expect(reminders[0]).toMatchObject({
@@ -64,7 +64,7 @@ describe('collectPendingAppointmentReminders', () => {
           telefono: '593999999999',
         },
       },
-    ], new Date('2026-06-10T09:00:00'))
+    ], new Date('2026-06-10T09:00:00-05:00'))
 
     expect(reminders).toHaveLength(1)
     expect(reminders[0]).toMatchObject({

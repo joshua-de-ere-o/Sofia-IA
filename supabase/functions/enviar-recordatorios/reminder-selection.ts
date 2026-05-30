@@ -44,8 +44,11 @@ function isInsideWindow(deltaMs: number, window: { min: number; max: number }) {
   return deltaMs >= window.min && deltaMs <= window.max;
 }
 
+// Las citas se guardan en hora local de Guayaquil (UTC-5, sin horario de verano).
+// El runtime de las Edge Functions corre en UTC, así que un string sin offset se
+// interpretaría como UTC y adelantaría el recordatorio 5 horas. Anclamos -05:00.
 function toAppointmentDateTime(fecha: string, hora: string) {
-  return new Date(`${fecha}T${hora}`);
+  return new Date(`${fecha}T${hora}-05:00`);
 }
 
 export function collectPendingAppointmentReminders(
