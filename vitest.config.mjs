@@ -2,6 +2,10 @@ import { defineConfig } from 'vitest/config'
 import { fileURLToPath } from 'node:url'
 
 export default defineConfig({
+  esbuild: {
+    jsx: 'automatic',
+    jsxImportSource: 'react',
+  },
   resolve: {
     alias: {
       '@': fileURLToPath(new URL('./', import.meta.url)),
@@ -13,5 +17,11 @@ export default defineConfig({
     globals: false,
     pool: process.platform === 'win32' ? 'threads' : 'forks',
     reporters: 'default',
+    coverage: {
+      provider: 'v8',
+      reporter: ['text', 'html', 'json-summary'],
+      reportsDirectory: './coverage',
+      reportOnFailure: true,
+    },
   },
 })
