@@ -10,6 +10,7 @@ import {
   detectConflicts,
   detectOverlaps,
 } from '@/lib/excepciones-logic'
+import { validateConversacionIds } from '@/lib/conversaciones-actions-logic'
 
 /**
  * Obtener la configuración general del sistema
@@ -31,7 +32,8 @@ export async function getSystemConfig() {
       ai_provider,
       ai_api_key,
       ycloud_daily_messages,
-      datos_bancarios
+      datos_bancarios,
+      agente_activo
     `)
     .eq('id', 1)
     .single()
@@ -76,6 +78,46 @@ export async function updateSystemConfig(updates) {
 
   if (error) {
     console.error("Error updating config:", error)
+    return { error: error.message }
+  }
+
+  return { success: true }
+}
+
+/**
+ * Leer el switch maestro global de Sofía (configuracion.agente_activo).
+ * Default true si la columna aún no existe / está null.
+ */
+export async function getAgenteGlobal() {
+  const supabase = await createServerSupabaseClient()
+  const { data, error } = await supabase
+    .from('configuracion')
+    .select('agente_activo')
+    .eq('id', 1)
+    .maybeSingle()
+
+  if (error) {
+    console.error('Error fetching agente_activo:', error)
+    return { error: error.message }
+  }
+
+  return { activo: data?.agente_activo !== false }
+}
+
+/**
+ * Encender/apagar a Sofía globalmente.
+ * El enforcement vive en el agent-runner (gate): con false, persiste el inbound
+ * y no responde a ningún paciente.
+ */
+export async function setAgenteGlobal(activo) {
+  const supabase = await createServerSupabaseClient()
+  const { error } = await supabase
+    .from('configuracion')
+    .update({ agente_activo: Boolean(activo) })
+    .eq('id', 1)
+
+  if (error) {
+    console.error('Error updating agente_activo:', error)
     return { error: error.message }
   }
 
@@ -199,6 +241,41 @@ export async function setConversacionMode(conversacion_id, mode) {
   }
 
   return { success: true }
+}
+
+/**
+ * Borrar una o varias conversaciones del CRM.
+ *
+ * Usa el admin client (service role) para el DELETE porque RLS sobre
+ * `conversaciones` podría no tener policy de DELETE para el rol autenticado,
+ * en cuyo caso borraría 0 filas en silencio. La acción exige sesión antes de
+ * tocar nada. No hay FKs hacia `conversaciones` y los mensajes viven embebidos
+ * en `mensajes_raw`, así que el borrado es limpio.
+ */
+export async function deleteConversaciones(ids) {
+  const validation = validateConversacionIds(ids)
+  if (!validation.ok) {
+    return { error: validation.message }
+  }
+
+  const authSupabase = await createServerSupabaseClient()
+  const { data: { user }, error: userError } = await authSupabase.auth.getUser()
+  if (userError || !user) {
+    return { error: 'Tu sesión expiró. Volvé a entrar para borrar conversaciones.' }
+  }
+
+  const admin = createAdminSupabaseClient()
+  const { error } = await admin
+    .from('conversaciones')
+    .delete()
+    .in('id', validation.ids)
+
+  if (error) {
+    console.error('Error deleting conversaciones:', error)
+    return { error: error.message }
+  }
+
+  return { success: true, deleted: validation.ids.length }
 }
 
 /**

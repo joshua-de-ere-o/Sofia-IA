@@ -7,6 +7,7 @@ import { getModelAdapter } from "./model-adapter.ts";
 import { appendForcedReminderHistory } from "./forced-reminder-history.ts";
 import { createLatencyTracker, getToolLatencyLabel, maskPhone, timeAsync } from "./latency.ts";
 import { matchesReminderKeyword } from "./reminder-routing.ts";
+import { decideAgentResponse } from "./agent-gate.ts";
 import {
   executeConsultarDisponibilidad,
   executeCalcularPrecio,
@@ -269,6 +270,34 @@ export async function handleRequest(req: Request) {
     };
 
     history.push(userMessage);
+
+    // 2b. Gate "¿Sofía debe responder?" — switch global + modo manual/personal.
+    // Se persiste el inbound ANTES de cortar para que la Dra. vea el mensaje en
+    // el CRM y pueda responder manual (decisión "guardar igual"). El mensaje ya
+    // está en `history`; solo falta volcarlo.
+    const { data: cfgGate } = await timeAsync(latency, 'preflight_agent_gate', async () =>
+      supabase.from('configuracion').select('agente_activo').eq('id', 1).maybeSingle()
+    );
+    const gate = decideAgentResponse({
+      agenteActivoGlobal: cfgGate?.agente_activo,
+      mode: conv.mode,
+      manualUntil: conv.manual_until,
+    });
+    if (!gate.respond) {
+      console.log(`[Agent-Runner] Sofía pausada (${gate.reason}) para ${maskPhone(senderNumber)}. Guardo inbound y no respondo.`);
+      await timeAsync(latency, 'conversation_persist', async () => {
+        await supabase
+          .from('conversaciones')
+          .update({
+            mensajes_raw: history,
+            ultima_actividad: new Date().toISOString(),
+            reactivacion_enviada: false,
+          })
+          .eq('id', conv.id);
+      });
+      latency.finish(gate.reason);
+      return new Response(JSON.stringify({ status: gate.reason }), { status: 200, headers: corsHeaders });
+    }
 
     // 3. Preparar el Adaptador de Modelo (lee directamente de Deno.env)
     const adapter = await timeAsync(latency, 'model_adapter', async () => getModelAdapter());
