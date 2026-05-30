@@ -58,6 +58,38 @@ function normalizedPayload(type, extras = {}) {
   }
 }
 
+function makeSupabaseOverride({ blocklist = null, configBlocklist = [], handoff = false } = {}) {
+  return {
+    from(table) {
+      if (table === 'blocklist') {
+        return {
+          select() { return this },
+          eq() { return this },
+          maybeSingle: async () => ({ data: blocklist, error: null }),
+        }
+      }
+
+      if (table === 'configuracion') {
+        return {
+          select() { return this },
+          eq() { return this },
+          maybeSingle: async () => ({ data: { blocklist_numeros: configBlocklist }, error: null }),
+        }
+      }
+
+      if (table === 'conversaciones') {
+        return {
+          select() { return this },
+          eq() { return this },
+          maybeSingle: async () => ({ data: { handoff_activo: handoff }, error: null }),
+        }
+      }
+
+      throw new Error(`Unexpected table: ${table}`)
+    },
+  }
+}
+
 describe('pre-filter contract — type routing', () => {
   // S1-prefilter: after normalization, document-image appears as type:'image' → pass
   it('S1: normalized image type (from document-image) → action:pass', async () => {
@@ -113,5 +145,40 @@ describe('pre-filter contract — type routing', () => {
     const payload = normalizedPayload('audio', { audio: { url: 'https://cdn.ycloud.com/audio.ogg' } })
     const result = await preFilter(payload)
     expect(result.action).toBe('unsupported')
+  })
+
+  it('keeps blocklist table precedence ahead of unsupported routing', async () => {
+    const payload = normalizedPayload('audio', { audio: { url: 'https://cdn.ycloud.com/audio.ogg' } })
+
+    const result = await preFilter(
+      payload,
+      makeSupabaseOverride({ blocklist: { phone: '+593999000111' } })
+    )
+
+    expect(result).toEqual({ action: 'block', reason: 'blocklist_table' })
+  })
+
+  it('keeps config blocklist precedence ahead of handoff and unsupported routing', async () => {
+    const payload = normalizedPayload('audio', { audio: { url: 'https://cdn.ycloud.com/audio.ogg' } })
+
+    const result = await preFilter(
+      payload,
+      makeSupabaseOverride({ configBlocklist: ['+593999000111'], handoff: true })
+    )
+
+    expect(result).toEqual({ action: 'block', reason: 'blocklist_config' })
+  })
+
+  it('keeps handoff precedence ahead of unsupported routing when blocklists miss', async () => {
+    const payload = normalizedPayload('document', {
+      document: { mime_type: 'application/pdf', link: 'https://cdn.ycloud.com/doc789' },
+    })
+
+    const result = await preFilter(
+      payload,
+      makeSupabaseOverride({ handoff: true })
+    )
+
+    expect(result).toEqual({ action: 'handoff' })
   })
 })
