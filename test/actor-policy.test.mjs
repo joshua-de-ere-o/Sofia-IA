@@ -179,6 +179,30 @@ describe('mergeOperatorOverrides() — isolation guarantee', () => {
   })
 })
 
+// ─── Guard: mergeOperatorOverrides rejects invalid policy ─────────────────────
+
+describe('mergeOperatorOverrides() — invalid policy guard', () => {
+  it('throws when policy is null', () => {
+    expect(() => mergeOperatorOverrides(null, {}, {})).toThrow(/mergeOperatorOverrides requires a valid policy/)
+  })
+
+  it('throws when policy is undefined', () => {
+    expect(() => mergeOperatorOverrides(undefined, {}, {})).toThrow(/mergeOperatorOverrides requires a valid policy/)
+  })
+
+  it('throws when policy is an empty object (no allowOperatorDefaults boolean)', () => {
+    expect(() => mergeOperatorOverrides({}, {}, {})).toThrow(/mergeOperatorOverrides requires a valid policy/)
+  })
+
+  it('does NOT throw for a valid patient policy (boolean false is still valid)', () => {
+    expect(() => mergeOperatorOverrides(PATIENT_WA_POLICY, {}, {})).not.toThrow()
+  })
+
+  it('does NOT throw for a valid operator policy', () => {
+    expect(() => mergeOperatorOverrides(OPERATOR_TELEGRAM_POLICY, {}, {})).not.toThrow()
+  })
+})
+
 // ─── Regression: constants are frozen (immutable) ─────────────────────────────
 
 describe('policy constants are immutable', () => {

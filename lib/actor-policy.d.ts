@@ -43,6 +43,7 @@ export declare function isPatient(policy: ActorPolicy): boolean;
  * Merges operator-supplied defaults into action args for operator policies.
  * For patient policies, returns the original args unchanged (no mutation).
  * Always returns a new object — never mutates input.
+ * @throws {Error} if policy is null/undefined or lacks a boolean allowOperatorDefaults field
  */
 export declare function mergeOperatorOverrides(
   policy: ActorPolicy,
