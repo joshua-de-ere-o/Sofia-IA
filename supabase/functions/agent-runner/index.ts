@@ -5,6 +5,7 @@ import { createClient } from "jsr:@supabase/supabase-js";
 import { SYSTEM_PROMPT, TOOLS, MODEL_CONFIG } from "./config.ts";
 import { getModelAdapter } from "./model-adapter.ts";
 import { appendForcedReminderHistory } from "./forced-reminder-history.ts";
+import { createLatencyTracker, getToolLatencyLabel, maskPhone, timeAsync } from "./latency.ts";
 import { matchesReminderKeyword } from "./reminder-routing.ts";
 import {
   executeConsultarDisponibilidad,
@@ -21,6 +22,8 @@ import {
   executeConfirmarActualizacionDatos,
 } from "./tools.ts";
 import { handlePaymentFlow } from "./payment-flow.ts";
+import { validateCondensationSummary } from "./condensation-validation.ts";
+export { validateCondensationSummary };
 
 const corsHeaders = {
   'Access-Control-Allow-Origin': '*',
@@ -131,7 +134,7 @@ async function sendWhatsAppResponse(to: string, text: string) {
   }
 }
 
-Deno.serve(async (req: Request) => {
+export async function handleRequest(req: Request) {
   if (req.method === 'OPTIONS') {
     return new Response('ok', { headers: corsHeaders });
   }
@@ -161,47 +164,60 @@ Deno.serve(async (req: Request) => {
     // already satisfied by the webhook fire-and-forget, so no hard deadline here,
     // but we still want to keep the image path clean and isolated).
     if (body.context?.imagen_recibida === true) {
-      console.log(`[Agent-Runner] image entry senderNumber=${senderNumber} wamid=${body.context?.wamid ?? "?"}`);
+      console.log(`[Agent-Runner] image entry senderNumber=${maskPhone(senderNumber)} wamid=${body.context?.wamid ?? "?"}`);
       return await handlePaymentFlow(body, supabase);
     }
 
-    // 1. Obtener/Crear conversación activa
-    let { data: conv } = await supabase
-      .from('conversaciones')
-      .select('*')
-      .eq('telefono_contacto', senderNumber)
-      .eq('estado', 'activa')
-      .single();
+    const correlationId = body.correlationId ?? `txt_${Date.now().toString(36)}`;
+    const latency = createLatencyTracker({ correlationId, senderNumber });
 
-    if (!conv) {
-      const { data: newConv, error } = await supabase
+    // 1. Obtener/Crear conversación activa
+    let conv;
+    await timeAsync(latency, 'preflight_conversation', async () => {
+      const { data } = await supabase
         .from('conversaciones')
-        .insert({
-          telefono_contacto: senderNumber,
-          canal: 'whatsapp',
-          estado: 'activa',
-          mensajes_raw: []
-        })
-        .select()
+        .select('*')
+        .eq('telefono_contacto', senderNumber)
+        .eq('estado', 'activa')
         .single();
 
-      if (error) throw error;
-      conv = newConv;
-    }
+      conv = data;
+
+      if (!conv) {
+        const { data: newConv, error } = await supabase
+          .from('conversaciones')
+          .insert({
+            telefono_contacto: senderNumber,
+            canal: 'whatsapp',
+            estado: 'activa',
+            mensajes_raw: []
+          })
+          .select()
+          .single();
+
+        if (error) throw error;
+        conv = newConv;
+      }
+    });
 
     // Si la conversación está en modo handoff, la IA no debe responder.
     if (conv.handoff_activo) {
-      console.log(`[Agent-Runner] Handoff activo para ${senderNumber}. Ignorando.`);
+      console.log(`[Agent-Runner] Handoff activo para ${maskPhone(senderNumber)}. Ignorando.`);
+      latency.finish('ignored_handoff');
       return new Response(JSON.stringify({ status: "ignored_handoff" }), { status: 200, headers: corsHeaders });
     }
 
     // 1b. Detectar paciente existente por teléfono (no por conversación).
     // Esto le dice al LLM si tiene que tratar al usuario como nuevo o retornante.
-    const { data: pacienteExistente } = await supabase
-      .from('pacientes')
-      .select('id, nombre, fecha_nacimiento, email, zona')
-      .eq('telefono', senderNumber)
-      .maybeSingle();
+    let pacienteExistente;
+    await timeAsync(latency, 'preflight_patient', async () => {
+      const { data } = await supabase
+        .from('pacientes')
+        .select('id, nombre, fecha_nacimiento, email, zona')
+        .eq('telefono', senderNumber)
+        .maybeSingle();
+      pacienteExistente = data;
+    });
 
     // Si el paciente existe y la conversación aún no está vinculada, vincularla.
     if (pacienteExistente && !conv.paciente_id) {
@@ -219,7 +235,7 @@ Deno.serve(async (req: Request) => {
     // the multi-turn collection naturally.
     let forcedToolCall: { name: string; input: Record<string, any> } | null = null;
     if (matchesReminderKeyword(text)) {
-      console.log(`[Agent-Runner] RECORDATORIOS keyword detected for ${senderNumber}`);
+      console.log(`[Agent-Runner] RECORDATORIOS keyword detected for ${maskPhone(senderNumber)}`);
       forcedToolCall = {
         name: "iniciar_actualizacion_datos",
         input: {
@@ -244,7 +260,7 @@ Deno.serve(async (req: Request) => {
       : `\n\n[PACIENTE NUEVO — no existe registro previo en el sistema]`;
     const memoryContext = conv.historial_resumido ? `\n\n[ESTADO PREVIO DE LA CONVERSACIÓN]:\n${conv.historial_resumido}` : "";
 
-    const datosBancarios = await getDatosBancarios(supabase);
+    const datosBancarios = await timeAsync(latency, 'preflight_bank_config', async () => getDatosBancarios(supabase));
     const datosBancariosCtx = formatDatosBancariosForLLM(datosBancarios);
 
     const userMessage = {
@@ -255,7 +271,7 @@ Deno.serve(async (req: Request) => {
     history.push(userMessage);
 
     // 3. Preparar el Adaptador de Modelo (lee directamente de Deno.env)
-    const adapter = await getModelAdapter();
+    const adapter = await timeAsync(latency, 'model_adapter', async () => getModelAdapter());
 
     // ── Inject forced tool call for RECORDATORIOS keyword ─────────────────
     // If the regex hook fired, we execute iniciar_actualizacion_datos directly,
@@ -269,7 +285,9 @@ Deno.serve(async (req: Request) => {
         conversacion_id: conv.id,
         paciente_id: conv.paciente_id,
       };
-      const toolResultStr = await toolExecutors[forcedToolCall.name](forcedToolCall.input, ctx);
+      const toolResultStr = await timeAsync(latency, getToolLatencyLabel(forcedToolCall.name), async () =>
+        toolExecutors[forcedToolCall.name](forcedToolCall.input, ctx)
+      );
 
       appendForcedReminderHistory({
         provider: adapter.provider,
@@ -297,17 +315,19 @@ Deno.serve(async (req: Request) => {
         ? (MODEL_CONFIG.max_tokens_confirmation || 100) 
         : (MODEL_CONFIG.max_tokens_normal || 300);
 
-      const { text: llmText, toolCalls } = await adapter.chat({
-        systemPrompt: SYSTEM_PROMPT, 
-        messages: history, 
-        tools: TOOLS, 
-        maxTokens: maxTokensToUse
-      });
+      const { text: llmText, toolCalls } = await timeAsync(latency, `llm_iteration_${iteration}`, async () =>
+        adapter.chat({
+          systemPrompt: SYSTEM_PROMPT,
+          messages: history,
+          tools: TOOLS,
+          maxTokens: maxTokensToUse
+        })
+      );
 
       // Si hay texto dirigido al usuario, lo guardamos y lo enviamos a WA
       if (llmText) {
         history.push({ role: 'assistant', content: llmText });
-        await sendWhatsAppResponse(senderNumber, llmText);
+        await timeAsync(latency, 'whatsapp_send', async () => sendWhatsAppResponse(senderNumber, llmText));
         agentFinished = true;
       }
 
@@ -319,7 +339,7 @@ Deno.serve(async (req: Request) => {
         history.push({ role: 'assistant', content: '', tool_calls: toolCalls });
 
         for (const tool of toolCalls) {
-          console.log(`[Agent-Runner] Ejecutando tool: ${tool.name}`, tool.input);
+          console.log(`[Agent-Runner] Ejecutando tool: ${tool.name}`);
           let toolResultStr = "";
           
           if (toolExecutors[tool.name]) {
@@ -328,8 +348,10 @@ Deno.serve(async (req: Request) => {
                conversacion_id: conv.id, 
                paciente_id: conv.paciente_id 
              };
-             toolResultStr = await toolExecutors[tool.name](tool.input, context);
-          } else {
+             toolResultStr = await timeAsync(latency, getToolLatencyLabel(tool.name), async () =>
+               toolExecutors[tool.name](tool.input, context)
+             );
+           } else {
              toolResultStr = JSON.stringify({ error: `Tool ${tool.name} no está implementada.` });
           }
 
@@ -368,37 +390,47 @@ Deno.serve(async (req: Request) => {
 }
 No inventes datos. Si no estás seguro de un campo, usá null.`;
       
-      const sumResponse = await adapter.chat({
-        systemPrompt: summaryPrompt, 
-        messages: history.filter((h: any) => h.role === 'user' || h.role === 'assistant'), 
-        tools: [], 
-        maxTokens: 250
-      });
-      const newSummary = sumResponse.text;
+      const sumResponse = await timeAsync(latency, 'history_condensation', async () =>
+        adapter.chat({
+          systemPrompt: summaryPrompt,
+          messages: history.filter((h: any) => h.role === 'user' || h.role === 'assistant'),
+          tools: [],
+          maxTokens: MODEL_CONFIG.condensation_max_tokens,
+        })
+      );
+      const newSummary = validateCondensationSummary(
+        sumResponse.text,
+        conv.historial_resumido ?? null,
+      );
       
       // Conservamos los últimos turnos completos para que el LLM mantenga
       // contexto inmediato aunque ya exista un resumen.
-      await supabase
-        .from('conversaciones')
-        .update({
-          mensajes_raw: tailWindow(history),
-          historial_resumido: newSummary,
-          ultima_actividad: new Date().toISOString(),
-          reactivacion_enviada: false
-        })
-        .eq('id', conv.id);
+      await timeAsync(latency, 'conversation_persist', async () => {
+        await supabase
+          .from('conversaciones')
+          .update({
+            mensajes_raw: tailWindow(history),
+            historial_resumido: newSummary,
+            ultima_actividad: new Date().toISOString(),
+            reactivacion_enviada: false
+          })
+          .eq('id', conv.id);
+      });
 
     } else {
-      await supabase
-        .from('conversaciones')
-        .update({
-          mensajes_raw: history,
-          ultima_actividad: new Date().toISOString(),
-          reactivacion_enviada: false
-        })
-        .eq('id', conv.id);
+      await timeAsync(latency, 'conversation_persist', async () => {
+        await supabase
+          .from('conversaciones')
+          .update({
+            mensajes_raw: history,
+            ultima_actividad: new Date().toISOString(),
+            reactivacion_enviada: false
+          })
+          .eq('id', conv.id);
+      });
     }
 
+    latency.finish('success');
     return new Response(JSON.stringify({ status: "success", historyLength: history.length }), { headers: corsHeaders, status: 200 });
 
   } catch (err: any) {
@@ -414,4 +446,8 @@ No inventes datos. Si no estás seguro de un campo, usá null.`;
     } catch (_) { /* no-op */ }
     return new Response(JSON.stringify({ error: err.message }), { status: 500, headers: corsHeaders });
   }
-});
+}
+
+if (Deno.env.get("AGENT_RUNNER_DISABLE_AUTO_SERVE") !== "1") {
+  Deno.serve(handleRequest);
+}

@@ -22,6 +22,10 @@ const PROVIDERS: Record<string, { defaultModel: string; endpoint: string }> = {
   },
 };
 
+function logProviderTiming(event: Record<string, unknown>) {
+  console.log(JSON.stringify({ level: "info", scope: "[Model-Adapter]", event: "provider_call", ...event }));
+}
+
 // ─── Conversiones de herramientas ─────────────────────────────────────────────
 
 // ─── Conversiones de mensajes ─────────────────────────────────────────────────
@@ -122,6 +126,7 @@ function normalizeGemini(data: any) {
 // ─── Llamadas API ─────────────────────────────────────────────────────────────
 
 async function callAnthropic(apiKey: string, model: string, systemPrompt: string, messages: any[], tools: any[], maxTokens: number) {
+  const startedAt = Date.now();
   const body: any = {
     model, max_tokens: maxTokens,
     system: [{ type: "text", text: systemPrompt, cache_control: { type: "ephemeral" } }],
@@ -134,11 +139,13 @@ async function callAnthropic(apiKey: string, model: string, systemPrompt: string
     headers: { "Content-Type": "application/json", "x-api-key": apiKey, "anthropic-version": "2023-06-01", "anthropic-beta": "prompt-caching-2024-07-31" },
     body: JSON.stringify(body),
   });
+  logProviderTiming({ provider: "anthropic", model, status: res.status, duration_ms: Date.now() - startedAt, ok: res.ok });
   if (!res.ok) throw new Error(`Anthropic ${res.status}: ${await res.text()}`);
   return normalizeAnthropic(await res.json());
 }
 
 async function callOpenAI(apiKey: string, model: string, systemPrompt: string, messages: any[], tools: any[], maxTokens: number) {
+  const startedAt = Date.now();
   const body: any = { model, max_tokens: maxTokens, messages: messagesToOpenAI(systemPrompt, messages) };
   if (tools.length > 0) body.tools = toolsToOpenAI(tools);
 
@@ -147,15 +154,18 @@ async function callOpenAI(apiKey: string, model: string, systemPrompt: string, m
     headers: { "Content-Type": "application/json", "Authorization": `Bearer ${apiKey}` },
     body: JSON.stringify(body),
   });
+  logProviderTiming({ provider: "openai", model, status: res.status, duration_ms: Date.now() - startedAt, ok: res.ok });
   if (!res.ok) throw new Error(`OpenAI ${res.status}: ${await res.text()}`);
   return normalizeOpenAI(await res.json());
 }
 
 async function callGemini(apiKey: string, model: string, systemPrompt: string, messages: any[], tools: any[], maxTokens: number) {
+  const startedAt = Date.now();
   const endpoint = `${PROVIDERS.gemini.endpoint}/models/${model}:generateContent?key=${apiKey}`;
   const body = buildGeminiRequestBody({ systemPrompt, messages, tools, maxTokens });
 
   const res = await fetch(endpoint, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
+  logProviderTiming({ provider: "gemini", model, status: res.status, duration_ms: Date.now() - startedAt, ok: res.ok });
   if (!res.ok) throw new Error(`Gemini ${res.status}: ${await res.text()}`);
   return normalizeGemini(await res.json());
 }

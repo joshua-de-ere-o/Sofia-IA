@@ -406,6 +406,7 @@ export const MODEL_CONFIG = {
   max_tokens_normal: 800,
   max_tokens_confirmation: 600,
   history_condensation_threshold: 50,
+  condensation_max_tokens: 400,
 };
 
 export const TOOLS = [

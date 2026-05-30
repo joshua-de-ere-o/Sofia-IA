@@ -9,6 +9,7 @@ import { parseSpanishDate } from "../../../lib/parse-spanish-date.js";
 import { verificarDatosPaciente } from "../../../lib/verificar-datos-paciente.js";
 import { confirmarActualizacionDatos as _confirmarActualizacionDatos } from "../../../lib/confirmar-actualizacion-datos.js";
 import { iniciarActualizacionDatos as _iniciarActualizacionDatos } from "../../../lib/iniciar-actualizacion-datos.js";
+export { getToolLatencyLabel } from "./latency.ts";
 
 /**
  * supabase/functions/agent-runner/tools.ts
@@ -437,7 +438,9 @@ export async function executeCancelarCita(args: any, context: any): Promise<stri
       return JSON.stringify({ error: "No se encontró ninguna cita activa para este paciente. Infórmale que no ves citas a su nombre." });
     }
 
-    const fechaCita = new Date(`${cita.fecha}T${cita.hora}`);
+    // Cita en hora local Guayaquil (UTC-5). Sin offset el runtime UTC la
+    // adelantaría 5h y la política de 24h se aplicaría de más.
+    const fechaCita = new Date(`${cita.fecha}T${cita.hora}-05:00`);
     const timeDiffMs = fechaCita.getTime() - new Date().getTime();
     const isLessThan24h = timeDiffMs < 24 * 60 * 60 * 1000;
 
@@ -503,7 +506,9 @@ export async function executeReprogramarCita(args: any, context: any): Promise<s
     const isHabitual = (count && count > 0) ? true : false;
     const minHours = isHabitual ? 24 : 48;
 
-    const fechaCita = new Date(`${cita.fecha}T${cita.hora}`);
+    // Cita en hora local Guayaquil (UTC-5). Sin offset el runtime UTC la
+    // adelantaría 5h y dispararía el no_show antes de tiempo.
+    const fechaCita = new Date(`${cita.fecha}T${cita.hora}-05:00`);
     const timeDiffMs = fechaCita.getTime() - new Date().getTime();
     const hoursLeft = timeDiffMs / 3600000;
 
