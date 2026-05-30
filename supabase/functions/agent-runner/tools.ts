@@ -481,19 +481,19 @@ export async function executeCancelarCita(args: any, context: any): Promise<stri
   }
 }
 
-export async function executeReprogramarCita(args: any, context: any): Promise<string> {
+export async function executeReprogramarCita(args: any, context: any, supabaseOverride?: ReturnType<typeof getSupabase>): Promise<string> {
   const { nueva_fecha, nueva_hora, motivo } = args;
   const { paciente_id } = context;
 
   if (!paciente_id) return JSON.stringify({ error: "No se identificó al paciente." });
 
   try {
-    const supabase = getSupabase();
-    
+    const supabase = supabaseOverride ?? getSupabase();
+
     // Obtener cita futura
     const { data: cita } = await supabase
       .from("citas")
-      .select("id, fecha, hora")
+      .select("id, fecha, hora, duracion_min")
       .eq("paciente_id", paciente_id)
       .in("estado", ["confirmada", "pendiente_pago"])
       .order("fecha", { ascending: true })
@@ -543,15 +543,26 @@ export async function executeReprogramarCita(args: any, context: any): Promise<s
     const [hPart, mPart] = String(nueva_hora).split(':');
     const nuevaHoraNorm = `${hPart.padStart(2, '0')}:${(mPart ?? '00').padStart(2, '0')}:00`;
 
-    // Primero verificar slot libre
+    // Verificar solape por duración real (no solo hora de inicio exacta).
+    // La cita conserva su servicio, así que mantiene su propia duración.
+    const citaDuracion = Number(cita.duracion_min) > 0 ? Number(cita.duracion_min) : 30;
+    const nuevaStart = timeToMinutes(nuevaHoraNorm);
+    const nuevaEnd = nuevaStart + citaDuracion;
+
     const { data: slotCheck } = await supabase
       .from('citas')
-      .select('id')
+      .select('id, hora, duracion_min, estado')
       .eq('fecha', nueva_fecha)
-      .eq('hora', nuevaHoraNorm)
+      .neq('id', cita.id)
       .not('estado', 'in', '(cancelada,no_show,rechazada)');
 
-    if (slotCheck && slotCheck.length > 0) {
+    const hasOverlap = (slotCheck ?? []).some((row: any) => {
+      const rowStart = timeToMinutes(row.hora);
+      const rowEnd = rowStart + (Number(row.duracion_min) > 0 ? Number(row.duracion_min) : 30);
+      return rangesOverlap(nuevaStart, nuevaEnd, rowStart, rowEnd);
+    });
+
+    if (hasOverlap) {
       return JSON.stringify({ error: "El nuevo slot ya está ocupado. Intenta con otra fecha/hora." });
     }
 
