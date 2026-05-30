@@ -26,6 +26,7 @@ import {
   generateSlots,
   generateAvailability,
   buildSlots,
+  buildOccupiedRanges,
   BASE_MORNING_SLOTS,
   BASE_AFTERNOON_SLOTS,
 } from '../lib/availability/slot-generator.js'
@@ -248,6 +249,41 @@ describe('computeDaySlots — feriado beats excepcion (SC-06, R-AV-02)', () => {
 // ---------------------------------------------------------------------------
 
 describe('generateSlots — full range generator', () => {
+  it('blocks overlapping 30-min candidates when an existing appointment lasts 60 minutes', () => {
+    const fecha = '2026-06-09'
+    const occupiedRanges = buildOccupiedRanges([
+      { fecha, hora: '09:00:00', duracion_min: 60, estado: 'confirmada' },
+    ])
+
+    const result = generateSlots({
+      fechaInicio: fecha,
+      fechaFin: fecha,
+      feriadosSet: new Set(),
+      excepcionesMap: new Map(),
+      occupiedSet: new Set(),
+      occupiedRanges,
+      todayStr: null,
+      currentHourStr: null,
+    })
+
+    expect(result[fecha].horarios).not.toContain('09:00')
+    expect(result[fecha].horarios).not.toContain('09:30')
+    expect(result[fecha].horarios).toContain('10:00')
+  })
+
+  it('ignores cancelada, no_show and rechazada rows when building occupied ranges', () => {
+    const occupiedRanges = buildOccupiedRanges([
+      { fecha: '2026-06-09', hora: '09:00:00', duracion_min: 60, estado: 'cancelada' },
+      { fecha: '2026-06-09', hora: '10:00:00', duracion_min: 60, estado: 'no_show' },
+      { fecha: '2026-06-09', hora: '11:00:00', duracion_min: 60, estado: 'rechazada' },
+      { fecha: '2026-06-09', hora: '12:00:00', duracion_min: 60, estado: 'confirmada' },
+    ])
+
+    expect(occupiedRanges).toEqual([
+      { fecha: '2026-06-09', start: '12:00', end: '13:00', duracion_min: 60 },
+    ])
+  })
+
   it('SC-07: occupied slot is filtered even under a santo_domingo exception', () => {
     // 2026-06-09 is a Tuesday (dayOfWeek=2)
     const fecha = '2026-06-09'

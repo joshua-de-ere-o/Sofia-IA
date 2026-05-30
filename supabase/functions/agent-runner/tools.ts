@@ -3,7 +3,7 @@ import { getServicio, SERVICIO_IDS_TODOS, DERIVACION_TEMPLATES, HANDOFF_WA_PRESE
 import { normalizeAmount, amountMatches } from "./amount.ts";
 import { logPaymentEvent } from "./log.ts";
 import { notifyKelyText } from "./telegram-notify.ts";
-import { generateAvailability } from "../../../lib/availability/slot-generator.js";
+import { buildOccupiedRanges, generateAvailability, rangesOverlap, timeToMinutes } from "../../../lib/availability/slot-generator.js";
 // Patient data-update tools (PR 2) — pure logic lives in lib/ for Vitest testability
 import { parseSpanishDate } from "../../../lib/parse-spanish-date.js";
 import { verificarDatosPaciente } from "../../../lib/verificar-datos-paciente.js";
@@ -121,7 +121,7 @@ export async function executeConsultarDisponibilidad(args: any): Promise<string>
         .lte('fecha', fecha_fin),
       supabase
         .from('citas')
-        .select('fecha, hora, estado')
+        .select('fecha, hora, estado, duracion_min')
         .gte('fecha', fecha_inicio)
         .lte('fecha', fecha_fin)
         .not('estado', 'in', '(cancelada,no_show,rechazada)'),
@@ -140,10 +140,9 @@ export async function executeConsultarDisponibilidad(args: any): Promise<string>
     );
 
     const occupiedSet = new Set<string>();
-    (citasRes.data ?? []).forEach((cita: any) => {
-      // hora comes as 'HH:MM:SS' — normalise to 'HH:MM'
-      const timeStr = cita.hora.substring(0, 5);
-      occupiedSet.add(`${cita.fecha}_${timeStr}`);
+    const occupiedRanges = buildOccupiedRanges(citasRes.data ?? []);
+    occupiedRanges.forEach((range) => {
+      occupiedSet.add(`${range.fecha}_${range.start}`);
     });
 
     const slotsLibres = generateAvailability({
@@ -152,6 +151,7 @@ export async function executeConsultarDisponibilidad(args: any): Promise<string>
       feriadosSet: feriadoSet,
       excepcionesMap,
       occupiedSet,
+      occupiedRanges,
       timeZone: "America/Guayaquil",
     });
 
@@ -217,15 +217,24 @@ export async function executeAgendarCita(args: any, context: any, supabaseOverri
     const [hPart, mPart] = String(hora).split(':');
     const horaNorm = `${hPart.padStart(2, '0')}:${(mPart ?? '00').padStart(2, '0')}:00`;
 
+    const serviceDuration = servicioGuard.duracion_min || 30;
+
     // 1. Verificar si el slot no fue ocupado en el último segundo
     const { data: slotCheck } = await supabase
       .from('citas')
-      .select('id')
+      .select('id, fecha, hora, duracion_min, estado')
       .eq('fecha', fecha)
-      .eq('hora', horaNorm)
       .not('estado', 'in', '(cancelada,no_show,rechazada)');
 
-    if (slotCheck && slotCheck.length > 0) {
+    const requestedStart = timeToMinutes(horaNorm);
+    const requestedEnd = requestedStart + serviceDuration;
+    const hasOverlap = (slotCheck ?? []).some((row: any) => {
+      const rowStart = timeToMinutes(row.hora);
+      const rowEnd = rowStart + (Number(row.duracion_min) > 0 ? Number(row.duracion_min) : 30);
+      return rangesOverlap(requestedStart, requestedEnd, rowStart, rowEnd);
+    });
+
+    if (hasOverlap) {
       return JSON.stringify({ 
         error: "El slot ya fue ocupado. Por favor, realiza otra consultar_disponibilidad y ofrécele al paciente otras opciones." 
       });
@@ -276,7 +285,7 @@ export async function executeAgendarCita(args: any, context: any, supabaseOverri
         servicio: servicio_id,
         fecha: fecha,
         hora: horaNorm,
-        duracion_min: 30,
+        duracion_min: serviceDuration,
         estado: estadoCita,
         modalidad: modalidad,
         motivo: motivo,

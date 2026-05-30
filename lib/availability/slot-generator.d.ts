@@ -7,8 +7,29 @@
 
 export declare const BASE_MORNING_SLOTS: string[];
 export declare const BASE_AFTERNOON_SLOTS: string[];
+export declare const NON_BLOCKING_APPOINTMENT_STATES: Set<string>;
 
 export declare function buildSlots(startTime: string, endTime: string): string[];
+export declare function normalizeTime(time: string): string;
+export declare function timeToMinutes(time: string): number;
+export declare function minutesToTime(totalMinutes: number): string;
+export declare function addMinutesToTime(time: string, minutesToAdd: number): string;
+export declare function rangesOverlap(startA: number, endA: number, startB: number, endB: number): boolean;
+
+export interface OccupiedRange {
+  fecha: string;
+  start: string;
+  end: string;
+  duracion_min: number;
+}
+
+export declare function buildOccupiedRanges(rows?: Array<Record<string, unknown>>): OccupiedRange[];
+export declare function isSlotOccupied(params: {
+  date: string;
+  timeSlot: string;
+  occupiedRanges?: OccupiedRange[];
+  slotDurationMin?: number;
+}): boolean;
 
 export interface ExcepcionHorario {
   ubicacion: 'quito_extendido' | 'solo_virtual' | 'santo_domingo';
@@ -42,6 +63,7 @@ export declare function generateSlots(params: {
   feriadosSet: Set<string>;
   excepcionesMap: Map<string, ExcepcionHorario>;
   occupiedSet: Set<string>;
+  occupiedRanges?: OccupiedRange[];
   todayStr: string | null;
   currentHourStr: string | null;
   maxDays?: number;
@@ -53,6 +75,7 @@ export declare function generateAvailability(params: {
   feriadosSet: Set<string>;
   excepcionesMap: Map<string, ExcepcionHorario>;
   occupiedSet: Set<string>;
+  occupiedRanges?: OccupiedRange[];
   timeZone: string;
   now?: Date;
   maxDays?: number;
