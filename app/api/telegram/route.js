@@ -20,6 +20,13 @@ const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL || '';
 const supabaseServiceKey = process.env.SUPABASE_SERVICE_ROLE_KEY || '';
 const supabase = createClient(supabaseUrl, supabaseServiceKey);
 
+/**
+ * @typedef {{ kind: 'clarification', message: string }} OperatorClarification
+ * @typedef {{ kind: 'preview', actionType: string, previewId: string, summary: string, changes: unknown[] }} OperatorPreview
+ * @typedef {{ kind: 'result', status: 'applied' | 'cancelled' | 'failed' | 'already', message: string }} OperatorResult
+ * @typedef {OperatorClarification | OperatorPreview | OperatorResult} OperatorToolResult
+ */
+
 export async function POST(req) {
   try {
     const update = await req.json();
@@ -68,9 +75,19 @@ async function handleCallbackQuery(callbackQuery) {
     const confirmar = data.startsWith('kelly_confirm_');
     const pendingId = data.replace(confirmar ? 'kelly_confirm_' : 'kelly_cancel_', '');
     if (pendingId && pendingId !== 'none') {
+      /** @type {OperatorResult} */
       const result = await resolveKellyPending(pendingId, confirmar);
-      await answerCallback(callbackQuery, result.toast);
-      await replaceButtons(callbackQuery, result.label);
+      // Map OperatorResult → Telegram toast + button label
+      const toast = result.message;
+      const label = result.status === 'applied'
+        ? '✅ Aplicado'
+        : result.status === 'cancelled'
+          ? '↩️ Cancelado'
+          : result.status === 'already'
+            ? 'ℹ️ Ya aplicada'
+            : '⚠️ Error';
+      await answerCallback(callbackQuery, toast);
+      await replaceButtons(callbackQuery, label);
     }
     return;
   }
@@ -865,6 +882,13 @@ async function handlePaymentReject(pendingId, callbackQuery) {
 
 // ─── Resolución de acciones confirmadas ───────────────────────────────────────
 
+/**
+ * Resolve a pending Kelly action (confirm or cancel).
+ *
+ * @param {string} pendingId
+ * @param {boolean} confirmar
+ * @returns {Promise<OperatorResult>}
+ */
 async function resolveKellyPending(pendingId, confirmar) {
   const { data: pending, error } = await supabase
     .from('pending_kelly_actions')
@@ -873,22 +897,42 @@ async function resolveKellyPending(pendingId, confirmar) {
     .single();
 
   if (error || !pending) {
-    return { toast: '⚠️ Acción no encontrada.', label: '⚠️ No encontrada' };
+    return { kind: 'result', status: 'failed', message: '⚠️ Acción no encontrada.' };
   }
   if (pending.ejecutada) {
-    return { toast: 'ℹ️ Ya estaba aplicada.', label: 'ℹ️ Ya aplicada' };
+    return { kind: 'result', status: 'already', message: 'ℹ️ Ya estaba aplicada.' };
   }
   if (new Date(pending.expira_at) < new Date()) {
-    return { toast: '⌛ La acción expiró.', label: '⌛ Expirada' };
+    return { kind: 'result', status: 'failed', message: '⌛ La acción expiró.' };
   }
 
+  // ── Optimistic lock (CAS): flip ejecutada=true BEFORE any side-effect.
+  // This closes the concurrent race: two taps both pass the early-exit checks
+  // above, but only one wins the UPDATE WHERE ejecutada=false.
+  // The winning tap gets count:1 and proceeds; the loser gets count:0 and stops.
+  const casAction = confirmar ? 'confirm' : 'cancel';
+  const { count: casCount, error: casError } = await supabase
+    .from('pending_kelly_actions')
+    .update({ ejecutada: true, ejecutada_at: new Date().toISOString() })
+    .eq('id', pendingId)
+    .eq('ejecutada', false)
+    .select();
+
+  if (casError) {
+    console.error(`[Telegram/kelly] CAS error (${casAction}):`, casError?.message || casError);
+    return { kind: 'result', status: 'failed', message: '⚠️ Falló al aplicar.' };
+  }
+  // count===0: another tap already won the lock (or already applied from JS guard above)
+  if (!casCount || casCount === 0) {
+    return { kind: 'result', status: 'already', message: 'ℹ️ Ya fue aplicada.' };
+  }
+
+  // We won the lock. For cancel: no side-effect needed.
   if (!confirmar) {
-    await supabase.from('pending_kelly_actions')
-      .update({ ejecutada: true, ejecutada_at: new Date().toISOString() })
-      .eq('id', pendingId);
-    return { toast: '↩️ Cancelado.', label: '↩️ Cancelado' };
+    return { kind: 'result', status: 'cancelled', message: '↩️ Cancelado.' };
   }
 
+  // We won the lock for confirm: execute the side-effect exactly once.
   try {
     if (pending.action_type === 'reagendar') {
       const { cita_id, nueva_fecha, nueva_hora } = pending.args;
@@ -912,12 +956,12 @@ async function resolveKellyPending(pendingId, confirmar) {
       if (e) throw e;
     } else if (pending.action_type === 'evento_personal') {
       const { fecha, hora, duracion_min, motivo, recordar_min_antes } = pending.args;
-      // 1. Bloquea la agenda en ese horario
+      // 1. Block the schedule slot
       const { error: eBloqueo } = await supabase
         .from('citas')
         .insert(buildBloqueoRow({ fecha, hora, duracion_min, motivo }));
       if (eBloqueo) throw eBloqueo;
-      // 2. Programa el recordatorio (default 30 min antes; 0 = sin recordatorio)
+      // 2. Schedule reminder (0 = no reminder)
       if (recordar_min_antes > 0) {
         const recordatorioIso = computeRecordatorioIso(fecha, hora, recordar_min_antes);
         const { error: eTarea } = await supabase
@@ -926,16 +970,15 @@ async function resolveKellyPending(pendingId, confirmar) {
         if (eTarea) throw eTarea;
       }
     } else {
-      return { toast: '⚠️ Tipo desconocido.', label: '⚠️ Tipo desconocido' };
+      return { kind: 'result', status: 'failed', message: '⚠️ Tipo desconocido.' };
     }
 
-    await supabase.from('pending_kelly_actions')
-      .update({ ejecutada: true, ejecutada_at: new Date().toISOString() })
-      .eq('id', pendingId);
-    return { toast: '✅ Aplicado.', label: '✅ Aplicado' };
+    return { kind: 'result', status: 'applied', message: '✅ Aplicado.' };
   } catch (err) {
     console.error('[Telegram/kelly] Error ejecutando acción:', err?.message || err);
-    return { toast: '⚠️ Falló al aplicar.', label: '⚠️ Falló' };
+    // Best-effort: the CAS lock was already flipped. The action failed but won't
+    // be retried (ejecutada=true). Log is sufficient for ops investigation.
+    return { kind: 'result', status: 'failed', message: '⚠️ Falló al aplicar.' };
   }
 }
 

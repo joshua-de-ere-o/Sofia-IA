@@ -69,12 +69,29 @@ function makeBuilder(table, rows) {
     lte: vi.fn().mockReturnThis(),
     order: vi.fn().mockReturnThis(),
     limit: vi.fn().mockReturnThis(),
-    update: vi.fn().mockReturnThis(),
     delete: vi.fn().mockReturnThis(),
     single: vi.fn().mockResolvedValue({ data: rows?.[0] ?? null, error: null }),
     insert: vi.fn((payload) => {
       (inserted[table] ||= []).push(payload)
       return builder
+    }),
+    // update() returns its own chainable builder that resolves count:1
+    // (simulates winning the optimistic lock / CAS on pending_kelly_actions)
+    update: vi.fn(() => {
+      const updateBuilder = {
+        eq: vi.fn().mockReturnThis(),
+        select: vi.fn().mockReturnThis(),
+        single: vi.fn().mockResolvedValue({ data: rows?.[0] ?? null, error: null }),
+      }
+      Object.defineProperty(updateBuilder, 'then', {
+        get() {
+          return (resolve) => resolve({ data: rows ?? [], error: null, count: 1 })
+        },
+      })
+      // Make eq() and select() return updateBuilder so chaining keeps working
+      updateBuilder.eq = vi.fn(() => updateBuilder)
+      updateBuilder.select = vi.fn(() => updateBuilder)
+      return updateBuilder
     }),
   }
   Object.defineProperty(builder, 'then', {
