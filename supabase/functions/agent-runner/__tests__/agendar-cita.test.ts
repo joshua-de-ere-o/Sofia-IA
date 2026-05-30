@@ -27,6 +27,7 @@ import { executeAgendarCita } from "../tools.ts";
 
 type AgendarMockState = {
   existingPatient: Record<string, unknown> | null;
+  slotConflicts: Record<string, unknown>[];
   patientsInserted: Record<string, unknown>[];
   patientsUpdated: Record<string, unknown>[];
   citasInserted: Record<string, unknown>[];
@@ -53,11 +54,21 @@ function makeMockSupabase(state: AgendarMockState) {
         // B) insert: .insert().select().single() → Promise<{data, error}>
         const citasObj = {
           select: (_cols?: string) => ({
-            eq: (_c1: string, _v1: unknown) => ({
-              eq: (_c2: string, _v2: unknown) => ({
+            eq: (c1: string, v1: unknown) => ({
+              eq: (c2: string, v2: unknown) => ({
                 not: (_c3: string, _op: string, _v3: unknown) =>
-                  Promise.resolve({ data: [], error: null }), // slot is always free
+                  Promise.resolve({
+                    data: state.slotConflicts.filter(
+                      (row) => row[c1] === v1 && row[c2] === v2,
+                    ),
+                    error: null,
+                  }),
               }),
+              not: (_c3: string, _op: string, _v3: unknown) =>
+                Promise.resolve({
+                  data: state.slotConflicts.filter((row) => row[c1] === v1),
+                  error: null,
+                }),
             }),
           }),
           insert: (rows: unknown) => {
@@ -154,6 +165,7 @@ Deno.test("executeAgendarCita — Scenario 1: new patient insert uses senderNumb
 
   const state: AgendarMockState = {
     existingPatient: null, // no existing patient
+    slotConflicts: [],
     patientsInserted: [],
     patientsUpdated: [],
     citasInserted: [],
@@ -189,6 +201,7 @@ Deno.test("executeAgendarCita — Scenario 2: existing patient lookup uses sende
 
   const state: AgendarMockState = {
     existingPatient: { id: "pac-existing-1", nombre: "Ana Torres", telefono: "+593987654321" },
+    slotConflicts: [],
     patientsInserted: [],
     patientsUpdated: [],
     citasInserted: [],
@@ -220,6 +233,7 @@ Deno.test("executeAgendarCita — Scenario 3: hallucinated paciente_telefono is 
 
   const state: AgendarMockState = {
     existingPatient: null,
+    slotConflicts: [],
     patientsInserted: [],
     patientsUpdated: [],
     citasInserted: [],
@@ -267,6 +281,7 @@ Deno.test("executeAgendarCita — Defensive: empty senderNumber returns error, n
 
   const state: AgendarMockState = {
     existingPatient: null,
+    slotConflicts: [],
     patientsInserted: [],
     patientsUpdated: [],
     citasInserted: [],
@@ -306,6 +321,7 @@ Deno.test("executeAgendarCita — Schema-compat: args without paciente_telefono 
 
   const state: AgendarMockState = {
     existingPatient: null,
+    slotConflicts: [],
     patientsInserted: [],
     patientsUpdated: [],
     citasInserted: [],
@@ -324,4 +340,52 @@ Deno.test("executeAgendarCita — Schema-compat: args without paciente_telefono 
     "Must NOT return 'Faltan parámetros requeridos' when paciente_telefono is absent from args",
   );
   assertEquals(result.success, true, "Must succeed without paciente_telefono in args");
+});
+
+Deno.test("executeAgendarCita — rejects overlap when a 60-minute appointment already covers the requested start", async () => {
+  Deno.env.set("SUPABASE_URL", "https://fake.supabase.co");
+  Deno.env.set("SUPABASE_SERVICE_ROLE_KEY", "fake-key");
+
+  const state: AgendarMockState = {
+    existingPatient: null,
+    slotConflicts: [
+      { id: "cita-1", fecha: "2026-06-10", hora: "09:00:00", duracion_min: 60, estado: "confirmada" },
+    ],
+    patientsInserted: [],
+    patientsUpdated: [],
+    citasInserted: [],
+    convUpdated: [],
+  };
+
+  const supabase = makeMockSupabase(state);
+  const result = JSON.parse(
+    await executeAgendarCita({ ...VALID_ARGS, hora: "09:30" }, VALID_CONTEXT, supabase as any),
+  );
+
+  assertStringIncludes(result.error, "ocupado", "Must reject interval overlap, not only exact start matches");
+  assertEquals(state.patientsInserted.length, 0, "Must not create patient rows when slot is already occupied");
+  assertEquals(state.citasInserted.length, 0, "Must not insert the appointment when overlap is detected");
+});
+
+Deno.test("executeAgendarCita — persists the real service duration instead of defaulting to 30 minutes", async () => {
+  Deno.env.set("SUPABASE_URL", "https://fake.supabase.co");
+  Deno.env.set("SUPABASE_SERVICE_ROLE_KEY", "fake-key");
+
+  const state: AgendarMockState = {
+    existingPatient: null,
+    slotConflicts: [],
+    patientsInserted: [],
+    patientsUpdated: [],
+    citasInserted: [],
+    convUpdated: [],
+  };
+
+  const supabase = makeMockSupabase(state);
+  const result = JSON.parse(
+    await executeAgendarCita(VALID_ARGS, VALID_CONTEXT, supabase as any),
+  );
+
+  assertEquals(result.success, true, "Expected success: true");
+  assertEquals(state.citasInserted.length, 1, "Expected exactly 1 cita insert");
+  assertEquals(state.citasInserted[0]!.duracion_min, 60, "Must persist the catalog duration for alimentario_mensual");
 });
