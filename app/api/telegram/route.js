@@ -15,6 +15,7 @@ import { createClient } from '@supabase/supabase-js';
 import { getModelAdapter } from '@/lib/model-adapter';
 import { sendWhatsAppMessage } from '../../../lib/ycloud.js';
 import { WAME_DEFAULT_PRESET } from '../../../lib/telegram.js';
+import { makePolicy, mergeOperatorOverrides } from '../../../lib/actor-policy.js';
 
 const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL || '';
 const supabaseServiceKey = process.env.SUPABASE_SERVICE_ROLE_KEY || '';
@@ -246,6 +247,18 @@ function extractJson(raw) {
 }
 
 async function handleKellyMessage(text) {
+  // Construct operator policy once — making the actor/channel boundary explicit.
+  // makePolicy throws on unknown combinations; that error is caught below and
+  // surfaces as a clean Kely-facing message instead of an unhandled crash.
+  let operatorPolicy;
+  try {
+    operatorPolicy = makePolicy('operator', 'telegram');
+  } catch (err) {
+    console.error('[Telegram/kelly] No se pudo construir política de operador:', err?.message || err);
+    await sendToKely('⚠️ Error interno de configuración. Avisa a Joshua.');
+    return;
+  }
+
   let adapter;
   try {
     adapter = await getModelAdapter();
@@ -278,18 +291,24 @@ async function handleKellyMessage(text) {
 
   const args = parsed.args || {};
   try {
+    /** @type {import('../../../lib/actor-policy.js').OperatorToolResult | undefined} */
+    let toolResult;
     switch (parsed.tool) {
-      case 'consultar_agenda':     return await toolConsultarAgenda(args);
-      case 'consultar_finanzas':   return await toolConsultarFinanzas(args);
-      case 'reagendar_cita_kelly': return await toolReagendarCita(args);
-      case 'cancelar_cita_kelly':  return await toolCancelarCita(args);
-      case 'crear_bloqueo_agenda': return await toolCrearBloqueo(args);
-      case 'agendar_evento_personal': return await toolAgendarEventoPersonal(args);
-      case 'crear_tarea':          return await toolCrearTarea(args);
-      case 'responder_texto':      return await sendToKely(args.texto || '…');
+      case 'consultar_agenda':        await toolConsultarAgenda(args); break;
+      case 'consultar_finanzas':      await toolConsultarFinanzas(args); break;
+      case 'reagendar_cita_kelly':    toolResult = await toolReagendarCita(args); break;
+      case 'cancelar_cita_kelly':     toolResult = await toolCancelarCita(args); break;
+      case 'crear_bloqueo_agenda':    toolResult = await toolCrearBloqueo(args); break;
+      case 'agendar_evento_personal': toolResult = await toolAgendarEventoPersonal(args, operatorPolicy); break;
+      case 'crear_tarea':             await toolCrearTarea(args); break;
+      case 'responder_texto':         await sendToKely(args.texto || '…'); break;
       default:
         console.error('[Telegram/kelly] Tool desconocida:', parsed.tool);
         await sendToKely('⚠️ No supe qué hacer con eso. ¿Puedes reformular?');
+    }
+    // Dispatcher: consume preview return and drive the Telegram send from one place.
+    if (toolResult?.kind === 'preview') {
+      await sendToKelyWithButtons(toolResult.summary, toolResult.changes);
     }
   } catch (err) {
     console.error(`[Telegram/kelly] Error en tool ${parsed.tool}:`, err?.message || err);
@@ -453,18 +472,25 @@ async function toolReagendarCita({ nombre_paciente, nueva_fecha, nueva_hora, fec
     .select('id')
     .single();
   if (error) throw error;
-  const cuerpo = [
+  const summary = [
     `🔄 Reagendar:`,
     `Paciente: ${paciente.nombre}`,
     `De: ${cita.fecha} ${(cita.hora || '').slice(0, 5)}`,
     `A: ${nueva_fecha} ${nueva_hora}`,
   ].join('\n');
-  await sendToKelyWithButtons(cuerpo, [
-    [
-      { text: '✅ Sí, reagendar', callback_data: `kelly_confirm_${pending.id}` },
-      { text: '❌ No', callback_data: `kelly_cancel_${pending.id}` },
+  /** @type {import('../../../lib/actor-policy.js').OperatorPreview} */
+  return {
+    kind: 'preview',
+    actionType: 'reagendar',
+    previewId: pending.id,
+    summary,
+    changes: [
+      [
+        { text: '✅ Sí, reagendar', callback_data: `kelly_confirm_${pending.id}` },
+        { text: '❌ No', callback_data: `kelly_cancel_${pending.id}` },
+      ],
     ],
-  ]);
+  };
 }
 
 async function toolCancelarCita({ nombre_paciente, fecha }) {
@@ -498,17 +524,24 @@ async function toolCancelarCita({ nombre_paciente, fecha }) {
     .select('id')
     .single();
   if (error) throw error;
-  const cuerpo = [
+  const summary = [
     `❌ Cancelar cita:`,
     `Paciente: ${paciente.nombre}`,
     `${cita.fecha} ${(cita.hora || '').slice(0, 5)} — ${cita.servicio || ''}`,
   ].join('\n');
-  await sendToKelyWithButtons(cuerpo, [
-    [
-      { text: '✅ Sí, cancelar', callback_data: `kelly_confirm_${pending.id}` },
-      { text: '↩️ No', callback_data: `kelly_cancel_${pending.id}` },
+  /** @type {import('../../../lib/actor-policy.js').OperatorPreview} */
+  return {
+    kind: 'preview',
+    actionType: 'cancelar',
+    previewId: pending.id,
+    summary,
+    changes: [
+      [
+        { text: '✅ Sí, cancelar', callback_data: `kelly_confirm_${pending.id}` },
+        { text: '↩️ No', callback_data: `kelly_cancel_${pending.id}` },
+      ],
     ],
-  ]);
+  };
 }
 
 async function toolCrearBloqueo({ fecha, hora, duracion_min, motivo }) {
@@ -524,17 +557,24 @@ async function toolCrearBloqueo({ fecha, hora, duracion_min, motivo }) {
     .select('id')
     .single();
   if (error) throw error;
-  const cuerpo = [
+  const summary = [
     `🛑 Bloquear agenda:`,
     `${fecha} ${hora} — ${duracion_min} min`,
     `Motivo: ${motivo}`,
   ].join('\n');
-  await sendToKelyWithButtons(cuerpo, [
-    [
-      { text: '✅ Sí, bloquear', callback_data: `kelly_confirm_${pending.id}` },
-      { text: '❌ No', callback_data: `kelly_cancel_${pending.id}` },
+  /** @type {import('../../../lib/actor-policy.js').OperatorPreview} */
+  return {
+    kind: 'preview',
+    actionType: 'bloqueo',
+    previewId: pending.id,
+    summary,
+    changes: [
+      [
+        { text: '✅ Sí, bloquear', callback_data: `kelly_confirm_${pending.id}` },
+        { text: '❌ No', callback_data: `kelly_cancel_${pending.id}` },
+      ],
     ],
-  ]);
+  };
 }
 
 // Fila de bloqueo de agenda. servicio y modalidad son NOT NULL en `citas`, así que
@@ -559,15 +599,24 @@ function computeRecordatorioIso(fecha, hora, minAntes) {
   return new Date(evento.getTime() - minAntes * 60 * 1000).toISOString();
 }
 
-async function toolAgendarEventoPersonal({ motivo, fecha, hora, duracion_min, recordar_min_antes }) {
+async function toolAgendarEventoPersonal(rawArgs, policy) {
+  const { motivo, fecha, hora } = rawArgs;
   if (!motivo || !fecha || !hora) {
-    return sendToKely('⚠️ Necesito qué es el evento, la fecha y la hora.');
+    await sendToKely('⚠️ Necesito qué es el evento, la fecha y la hora.');
+    return;
   }
-  const duracion = Number(duracion_min) > 0 ? Number(duracion_min) : 60;
-  const recordar =
-    recordar_min_antes === undefined || recordar_min_antes === null
-      ? 30
-      : Math.max(0, Number(recordar_min_antes) || 0);
+
+  // Merge operator defaults through the audited policy path.
+  // The policy guard in mergeOperatorOverrides ensures misconfigured callers fail loudly.
+  const merged = mergeOperatorOverrides(policy, rawArgs, {
+    duracion_min: 60,
+    recordar_min_antes: 30,
+  });
+
+  // Coerce and validate after merge: duracion_min must be a positive number.
+  const duracion = Number(merged.duracion_min) > 0 ? Number(merged.duracion_min) : 60;
+  // recordar_min_antes=0 is valid (no reminder); negative values are clamped to 0.
+  const recordar = Math.max(0, Number(merged.recordar_min_antes) || 0);
 
   const { data: pending, error } = await supabase
     .from('pending_kelly_actions')
@@ -579,18 +628,25 @@ async function toolAgendarEventoPersonal({ motivo, fecha, hora, duracion_min, re
     .single();
   if (error) throw error;
 
-  const cuerpo = [
+  const summary = [
     `🗓️ Evento personal:`,
     motivo,
     `${fecha} ${hora} — ${duracion} min`,
     recordar > 0 ? `Recordatorio: ${recordar} min antes` : 'Sin recordatorio',
   ].join('\n');
-  await sendToKelyWithButtons(cuerpo, [
-    [
-      { text: '✅ Sí, agendar', callback_data: `kelly_confirm_${pending.id}` },
-      { text: '❌ No', callback_data: `kelly_cancel_${pending.id}` },
+  /** @type {import('../../../lib/actor-policy.js').OperatorPreview} */
+  return {
+    kind: 'preview',
+    actionType: 'evento_personal',
+    previewId: pending.id,
+    summary,
+    changes: [
+      [
+        { text: '✅ Sí, agendar', callback_data: `kelly_confirm_${pending.id}` },
+        { text: '❌ No', callback_data: `kelly_cancel_${pending.id}` },
+      ],
     ],
-  ]);
+  };
 }
 
 async function toolCrearTarea({ descripcion, fecha_hora_iso }) {
