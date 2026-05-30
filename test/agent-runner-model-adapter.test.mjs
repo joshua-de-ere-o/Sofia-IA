@@ -1,7 +1,20 @@
-import { describe, it, expect } from 'vitest'
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
+
+vi.mock('jsr:@supabase/supabase-js', () => ({
+  createClient: vi.fn(() => ({
+    from: vi.fn(() => ({
+      select: vi.fn(() => ({
+        limit: vi.fn(() => ({
+          single: vi.fn(async () => ({ data: null, error: null })),
+        })),
+      })),
+    })),
+  })),
+}))
 
 import { sanitizeSchemaForGemini } from '../supabase/functions/agent-runner/gemini-schema.ts'
 import { buildGeminiRequestBody, buildProviderToolPayload } from '../supabase/functions/agent-runner/provider-payloads.ts'
+import { createModelAdapter } from '../supabase/functions/agent-runner/model-adapter.ts'
 
 describe('sanitizeSchemaForGemini', () => {
   it('removes nullable union type arrays recursively for Gemini payloads', () => {
@@ -123,5 +136,43 @@ describe('provider request preparation', () => {
     expect(body.tools[0].functionDeclarations[0].parameters.properties.paciente_id.type).toBe('string')
     expect(body.tools[0].functionDeclarations[0].parameters.properties.nested.properties.existing_telefono.type).toBe('string')
     expect(body.tools[0].functionDeclarations[0].parameters.required).toEqual(['nested'])
+  })
+})
+
+describe('model adapter provider timing logs', () => {
+  let fetchSpy
+  let logSpy
+
+  beforeEach(() => {
+    fetchSpy = vi.spyOn(globalThis, 'fetch')
+    logSpy = vi.spyOn(console, 'log').mockImplementation(() => {})
+  })
+
+  afterEach(() => {
+    vi.restoreAllMocks()
+  })
+
+  it('logs provider, model, status, and duration without prompt plaintext on success', async () => {
+    fetchSpy.mockResolvedValue({
+      ok: true,
+      status: 200,
+      json: async () => ({ choices: [{ message: { content: 'ok', tool_calls: [] } }], usage: { prompt_tokens: 10, completion_tokens: 3 } }),
+    })
+
+    const adapter = createModelAdapter('openai', 'test-key', 'gpt-4o-mini')
+    const result = await adapter.chat({
+      systemPrompt: 'SENSITIVE SYSTEM PROMPT',
+      messages: [{ role: 'user', content: 'Paciente Ana Pérez' }],
+      tools: [],
+      maxTokens: 40,
+    })
+
+    expect(result.text).toBe('ok')
+    const joinedLogs = logSpy.mock.calls.map(([entry]) => String(entry)).join(' ')
+    expect(joinedLogs).toContain('openai')
+    expect(joinedLogs).toContain('gpt-4o-mini')
+    expect(joinedLogs).toContain('200')
+    expect(joinedLogs).not.toContain('SENSITIVE SYSTEM PROMPT')
+    expect(joinedLogs).not.toContain('Paciente Ana Pérez')
   })
 })

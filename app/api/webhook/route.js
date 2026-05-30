@@ -15,6 +15,55 @@ function maskPhone(phone) {
   return `${phone.slice(0, 5)}***${phone.slice(-4)}`;
 }
 
+function createCorrelationId() {
+  return `txt_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`;
+}
+
+function getTextDebounceMs() {
+  const raw = Number(process.env.TEXT_DEBOUNCE_MS ?? 900);
+  return Number.isFinite(raw) && raw >= 0 ? raw : 900;
+}
+
+function createTextLatencyTracker(correlationId, senderNumber) {
+  const entries = [];
+
+  return {
+    record(stage, startedAt, extra = {}) {
+      const entry = {
+        level: 'info',
+        scope: '[Webhook]',
+        event: 'text_path_stage',
+        correlation_id: correlationId,
+        phone: maskPhone(senderNumber),
+        stage,
+        duration_ms: Date.now() - startedAt,
+        ...extra,
+      };
+      entries.push(entry);
+      console.log(JSON.stringify(entry));
+      return entry;
+    },
+    finish(outcome) {
+      if (entries.length === 0) return;
+      const slowest = entries.reduce((current, entry) =>
+        entry.duration_ms > current.duration_ms ? entry : current
+      );
+      console.log(JSON.stringify({
+        level: 'info',
+        scope: '[Webhook]',
+        event: 'text_path_hotspot',
+        correlation_id: correlationId,
+        phone: maskPhone(senderNumber),
+        outcome,
+        stage_count: entries.length,
+        slowest_stage: slowest.stage,
+        slowest_duration_ms: slowest.duration_ms,
+        total_duration_ms: entries.reduce((sum, entry) => sum + entry.duration_ms, 0),
+      }));
+    },
+  };
+}
+
 /**
  * Returns true if the MIME type string starts with "image/" (case-insensitive).
  * Strips RFC-2045 parameters (e.g. "image/jpeg; charset=binary") before testing.
@@ -157,7 +206,7 @@ function normalizeYCloudPayload(raw) {
   return raw;
 }
 
-const DEBOUNCE_MS = 1500;
+const TEXT_DEBOUNCE_MS = getTextDebounceMs();
 
 function getServiceClient() {
   return createClient(
@@ -240,21 +289,28 @@ export async function POST(req) {
     const senderNumber = message.from;
     const messageType = message.type;
     const supabase = getServiceClient();
+    const correlationId = messageType === 'text' ? createCorrelationId() : null;
+    const textLatency = correlationId ? createTextLatencyTracker(correlationId, senderNumber) : null;
 
     // Ejecutar pre-filtro (6 capas)
+    const preFilterStartedAt = Date.now();
     const result = await preFilter(payload, supabase);
+    textLatency?.record('prefilter', preFilterStartedAt, { ok: true, action: result.action });
 
     if (result.action === "ignore") {
+      textLatency?.finish('ignored');
       return NextResponse.json({ received: true, filtered: true, reason: "ignored" });
     }
 
     if (result.action === "block") {
-      console.log(`[Webhook] Bloqueo silencioso ${senderNumber}: ${result.reason}`);
+      console.log(JSON.stringify({ level: 'info', scope: '[Webhook]', event: 'blocked_text_path', phone: maskPhone(senderNumber), reason: result.reason, correlation_id: correlationId }));
+      textLatency?.finish('blocked');
       return NextResponse.json({ received: true, filtered: true, reason: result.reason });
     }
 
     if (result.action === "handoff") {
-      console.log(`[Webhook] Handoff activo ${senderNumber}: la IA no responde.`);
+      console.log(JSON.stringify({ level: 'info', scope: '[Webhook]', event: 'handoff_text_path', phone: maskPhone(senderNumber), correlation_id: correlationId }));
+      textLatency?.finish('handoff');
       return NextResponse.json({ received: true, filtered: true, reason: "handoff" });
     }
 
@@ -282,6 +338,7 @@ export async function POST(req) {
           error: err?.message ?? String(err),
         }));
       }
+      textLatency?.finish('unsupported');
       return NextResponse.json({ received: true, filtered: true, reason: "unsupported" });
     }
 
@@ -369,20 +426,24 @@ export async function POST(req) {
     if (messageType === "text") {
       const textBody = message.text?.body;
 
-      // Debounce 2.5s — si llega otro mensaje más reciente, abortar este
+      // Debounce conservador configurable — si llega otro mensaje más reciente, abortar este
+      const debounceStartedAt = Date.now();
       const stamp = await markLastMessage(supabase, senderNumber);
-      await new Promise((r) => setTimeout(r, DEBOUNCE_MS));
+      await new Promise((r) => setTimeout(r, TEXT_DEBOUNCE_MS));
       const latest = await isStillLatest(supabase, senderNumber, stamp);
+      textLatency?.record('debounce', debounceStartedAt, { ok: latest, debounce_ms: TEXT_DEBOUNCE_MS });
       if (!latest) {
-        console.log(`[Webhook] Debounce descartó mensaje de ${senderNumber}: llegó otro más reciente`);
+        console.log(JSON.stringify({ level: 'info', scope: '[Webhook]', event: 'text_debounced', phone: maskPhone(senderNumber), correlation_id: correlationId }));
+        textLatency?.finish('debounced');
         return NextResponse.json({ received: true, debounced: true });
       }
 
       const agentUrl = `${process.env.NEXT_PUBLIC_SUPABASE_URL}/functions/v1/agent-runner`;
-      const body = { senderNumber, text: textBody };
+      const body = { senderNumber, text: textBody, correlationId };
       if (result.context) body.context = result.context;
 
-      console.log(`[Webhook] → agent-runner (${senderNumber})`);
+      const dispatchStartedAt = Date.now();
+      console.log(JSON.stringify({ level: 'info', scope: '[Webhook]', event: 'agent_runner_dispatch_start', phone: maskPhone(senderNumber), correlation_id: correlationId }));
       const agentRes = await fetch(agentUrl, {
         method: "POST",
         headers: {
@@ -391,11 +452,14 @@ export async function POST(req) {
         },
         body: JSON.stringify(body),
       });
+      textLatency?.record('agent_runner_dispatch', dispatchStartedAt, { ok: agentRes.ok, status: agentRes.status });
 
       if (!agentRes.ok) {
         const errorBody = await agentRes.text().catch(() => "");
         console.error(`[Webhook] agent-runner falló (${agentRes.status}) para ${senderNumber}:`, errorBody);
       }
+
+      textLatency?.finish(agentRes.ok ? 'agent_dispatched' : 'agent_dispatch_failed');
     }
 
     return NextResponse.json({ received: true });
