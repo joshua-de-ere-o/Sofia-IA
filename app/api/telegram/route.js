@@ -23,7 +23,7 @@ const supabase = createClient(supabaseUrl, supabaseServiceKey);
 /**
  * @typedef {{ kind: 'clarification', message: string }} OperatorClarification
  * @typedef {{ kind: 'preview', actionType: string, previewId: string, summary: string, changes: unknown[] }} OperatorPreview
- * @typedef {{ kind: 'result', status: 'applied' | 'cancelled' | 'failed', message: string }} OperatorResult
+ * @typedef {{ kind: 'result', status: 'applied' | 'cancelled' | 'failed' | 'already', message: string }} OperatorResult
  * @typedef {OperatorClarification | OperatorPreview | OperatorResult} OperatorToolResult
  */
 
@@ -83,7 +83,9 @@ async function handleCallbackQuery(callbackQuery) {
         ? '✅ Aplicado'
         : result.status === 'cancelled'
           ? '↩️ Cancelado'
-          : '⚠️ Error';
+          : result.status === 'already'
+            ? 'ℹ️ Ya aplicada'
+            : '⚠️ Error';
       await answerCallback(callbackQuery, toast);
       await replaceButtons(callbackQuery, label);
     }
@@ -898,21 +900,39 @@ async function resolveKellyPending(pendingId, confirmar) {
     return { kind: 'result', status: 'failed', message: '⚠️ Acción no encontrada.' };
   }
   if (pending.ejecutada) {
-    return { kind: 'result', status: 'failed', message: 'ℹ️ Ya estaba aplicada.' };
+    return { kind: 'result', status: 'already', message: 'ℹ️ Ya estaba aplicada.' };
   }
   if (new Date(pending.expira_at) < new Date()) {
     return { kind: 'result', status: 'failed', message: '⌛ La acción expiró.' };
   }
 
+  // ── Optimistic lock (CAS): flip ejecutada=true BEFORE any side-effect.
+  // This closes the concurrent race: two taps both pass the early-exit checks
+  // above, but only one wins the UPDATE WHERE ejecutada=false.
+  // The winning tap gets count:1 and proceeds; the loser gets count:0 and stops.
+  const casAction = confirmar ? 'confirm' : 'cancel';
+  const { count: casCount, error: casError } = await supabase
+    .from('pending_kelly_actions')
+    .update({ ejecutada: true, ejecutada_at: new Date().toISOString() })
+    .eq('id', pendingId)
+    .eq('ejecutada', false)
+    .select();
+
+  if (casError) {
+    console.error(`[Telegram/kelly] CAS error (${casAction}):`, casError?.message || casError);
+    return { kind: 'result', status: 'failed', message: '⚠️ Falló al aplicar.' };
+  }
+  // count===0: another tap already won the lock (or already applied from JS guard above)
+  if (!casCount || casCount === 0) {
+    return { kind: 'result', status: 'already', message: 'ℹ️ Ya fue aplicada.' };
+  }
+
+  // We won the lock. For cancel: no side-effect needed.
   if (!confirmar) {
-    // Atomic cancel: guard against concurrent taps with ejecutada=false filter
-    await supabase.from('pending_kelly_actions')
-      .update({ ejecutada: true, ejecutada_at: new Date().toISOString() })
-      .eq('id', pendingId)
-      .eq('ejecutada', false);
     return { kind: 'result', status: 'cancelled', message: '↩️ Cancelado.' };
   }
 
+  // We won the lock for confirm: execute the side-effect exactly once.
   try {
     if (pending.action_type === 'reagendar') {
       const { cita_id, nueva_fecha, nueva_hora } = pending.args;
@@ -953,16 +973,11 @@ async function resolveKellyPending(pendingId, confirmar) {
       return { kind: 'result', status: 'failed', message: '⚠️ Tipo desconocido.' };
     }
 
-    // Atomic mark-executed: .eq('ejecutada', false) prevents double-tap mutation
-    // (mirrors the status-guarded UPDATE pattern used in handlePaymentConfirm)
-    await supabase.from('pending_kelly_actions')
-      .update({ ejecutada: true, ejecutada_at: new Date().toISOString() })
-      .eq('id', pendingId)
-      .eq('ejecutada', false);
-
     return { kind: 'result', status: 'applied', message: '✅ Aplicado.' };
   } catch (err) {
     console.error('[Telegram/kelly] Error ejecutando acción:', err?.message || err);
+    // Best-effort: the CAS lock was already flipped. The action failed but won't
+    // be retried (ejecutada=true). Log is sufficient for ops investigation.
     return { kind: 'result', status: 'failed', message: '⚠️ Falló al aplicar.' };
   }
 }

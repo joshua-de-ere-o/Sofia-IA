@@ -65,7 +65,8 @@ let updated
  * Build a chainable Supabase mock for `table`.
  * `rows` is the data returned by .single() and the thenable.
  * `updateData` optionally lets tests control what the UPDATE chain resolves with
- * (to simulate "0 rows affected" for the TOCTOU guard).
+ * (to simulate "0 rows affected" for the TOCTOU CAS guard).
+ * Default count for updates is 1 (lock won). Pass count:0 to simulate lock lost.
  */
 function makeBuilder(table, rows, { updateData } = {}) {
   const eqFilters = {}
@@ -95,21 +96,23 @@ function makeBuilder(table, rows, { updateData } = {}) {
       const entry = { payload, filters: updateFilters }
       ;(updated[table] ||= []).push(entry)
 
+      const resolvedUpdateData = updateData ?? { data: rows ?? [], error: null, count: 1 }
+
       const updateBuilder = {
         eq: vi.fn((col, val) => {
           updateFilters[col] = val
-          // Keep entry.filters reference in sync (same object, already live)
           return updateBuilder
         }),
+        // .select() after .update() — used by the CAS flip to get count back
+        select: vi.fn(() => updateBuilder),
         single: vi.fn().mockResolvedValue(
           updateData ?? { data: rows?.[0] ?? null, error: null }
         ),
       }
-      // Make it thenable so awaiting the chain works
+      // Make it thenable so awaiting the chain works (including after .select())
       Object.defineProperty(updateBuilder, 'then', {
         get() {
-          return (resolve) =>
-            resolve(updateData ?? { data: rows ?? [], error: null, count: 1 })
+          return (resolve) => resolve(resolvedUpdateData)
         },
       })
       return updateBuilder
@@ -285,25 +288,20 @@ describe('resolveKellyPending — reuse rejection', () => {
 })
 
 // ═══════════════════════════════════════════════════════════════════════════════
-// 4. TOCTOU fix — atomic UPDATE includes ejecutada=false guard
+// 4. TOCTOU fix — optimistic-lock CAS: flip FIRST, side-effect only if won
 // ═══════════════════════════════════════════════════════════════════════════════
 
-describe('TOCTOU fix — atomic ejecutada guard', () => {
-  it('confirm reagendar marks pending_kelly_actions UPDATE with ejecutada=false guard', async () => {
+describe('TOCTOU fix — optimistic-lock CAS', () => {
+  // ── 4a. First tap wins the lock: CAS returns count:1, side-effect runs ────────
+  it('first tap wins CAS (count:1) → side-effect runs, status applied', async () => {
     const pending = {
-      id: 'rp-toctou',
+      id: 'rp-toctou-win',
       action_type: 'reagendar',
       ejecutada: false,
       expira_at: new Date(Date.now() + 3600_000).toISOString(),
-      args: {
-        cita_id: 'cita-toctou',
-        paciente_nombre: 'Carlos',
-        fecha_original: '2026-05-01',
-        hora_original: '09:00',
-        nueva_fecha: '2026-06-10',
-        nueva_hora: '10:00',
-      },
+      args: { cita_id: 'cita-x', nueva_fecha: '2026-06-10', nueva_hora: '10:00' },
     }
+    // Default updateData has count:1 — lock won
     mockFrom.mockImplementation((table) =>
       table === 'pending_kelly_actions' ? makeBuilder(table, [pending]) : makeBuilder(table, []),
     )
@@ -311,24 +309,105 @@ describe('TOCTOU fix — atomic ejecutada guard', () => {
     const { POST } = await loadRoute()
     await POST(makeRequest({
       callback_query: {
-        id: 'cq-toctou',
-        data: 'kelly_confirm_rp-toctou',
+        id: 'cq-win',
+        data: 'kelly_confirm_rp-toctou-win',
         message: { message_id: 1, chat: { id: 999 } },
       },
     }))
 
-    // The UPDATE that marks the action as ejecutada MUST include an .eq('ejecutada', false) guard
+    // CAS UPDATE must be first on pending_kelly_actions and include the guard
     const pendingUpdates = updated['pending_kelly_actions'] ?? []
-    const markExecuted = pendingUpdates.find(
-      (u) => u.payload?.ejecutada === true
-    )
-    expect(markExecuted).toBeTruthy()
-    expect(markExecuted.filters['ejecutada']).toBe(false)
+    const casUpdate = pendingUpdates[0]
+    expect(casUpdate).toBeTruthy()
+    expect(casUpdate.payload?.ejecutada).toBe(true)
+    expect(casUpdate.filters['ejecutada']).toBe(false)
+
+    // Side-effect (citas UPDATE) MUST have run because we won
+    const citaUpdates = updated['citas'] ?? []
+    expect(citaUpdates.length).toBeGreaterThan(0)
+
+    // Response must say applied
+    const answerCall = capturedFetches.find((f) => f.url.includes('answerCallbackQuery'))
+    const body = JSON.parse(answerCall.opts.body)
+    expect(body.text).toMatch(/Aplicado/i)
   })
 
-  it('confirm bloqueo marks pending_kelly_actions UPDATE with ejecutada=false guard', async () => {
+  // ── 4b. Second tap loses the lock: CAS returns count:0 → side-effect does NOT run ──
+  // THIS TEST WOULD FAIL if the CAS were reordered back to side-effect-first,
+  // because in the old order the side-effect ran before the guarded UPDATE.
+  it('second tap loses CAS (count:0) → side-effect does NOT run, status already', async () => {
     const pending = {
-      id: 'rp-bloqueo-toctou',
+      id: 'rp-toctou-lose',
+      action_type: 'reagendar',
+      ejecutada: false,
+      expira_at: new Date(Date.now() + 3600_000).toISOString(),
+      args: { cita_id: 'cita-y', nueva_fecha: '2026-06-11', nueva_hora: '11:00' },
+    }
+    // CAS returns count:0 → another tap already won
+    mockFrom.mockImplementation((table) =>
+      table === 'pending_kelly_actions'
+        ? makeBuilder(table, [pending], { updateData: { data: null, error: null, count: 0 } })
+        : makeBuilder(table, []),
+    )
+
+    const { POST } = await loadRoute()
+    await POST(makeRequest({
+      callback_query: {
+        id: 'cq-lose',
+        data: 'kelly_confirm_rp-toctou-lose',
+        message: { message_id: 1, chat: { id: 999 } },
+      },
+    }))
+
+    // CAS UPDATE was attempted (it's the first update on pending_kelly_actions)
+    const pendingUpdates = updated['pending_kelly_actions'] ?? []
+    expect(pendingUpdates.length).toBeGreaterThan(0)
+    expect(pendingUpdates[0].filters['ejecutada']).toBe(false)
+
+    // Side-effect (citas) MUST NOT have run — we lost the race
+    expect(updated['citas']).toBeUndefined()
+    expect(inserted['citas']).toBeUndefined()
+
+    // Response must NOT say "Aplicado"
+    const answerCall = capturedFetches.find((f) => f.url.includes('answerCallbackQuery'))
+    expect(answerCall).toBeTruthy()
+    const body = JSON.parse(answerCall.opts.body)
+    expect(body.text).not.toMatch(/✅ Aplicado/i)
+  })
+
+  // ── 4c. Same race for bloqueo — CAS loses → no citas INSERT ──────────────────
+  it('bloqueo second tap loses CAS (count:0) → no citas insert', async () => {
+    const pending = {
+      id: 'rp-bloqueo-lose',
+      action_type: 'bloqueo',
+      ejecutada: false,
+      expira_at: new Date(Date.now() + 3600_000).toISOString(),
+      args: { fecha: '2026-06-01', hora: '08:00', duracion_min: 60, motivo: 'Capacitación' },
+    }
+    mockFrom.mockImplementation((table) =>
+      table === 'pending_kelly_actions'
+        ? makeBuilder(table, [pending], { updateData: { data: null, error: null, count: 0 } })
+        : makeBuilder(table, []),
+    )
+
+    const { POST } = await loadRoute()
+    await POST(makeRequest({
+      callback_query: {
+        id: 'cq-bloqueo-lose',
+        data: 'kelly_confirm_rp-bloqueo-lose',
+        message: { message_id: 1, chat: { id: 999 } },
+      },
+    }))
+
+    // No citas INSERT must have happened
+    expect(inserted['citas']).toBeUndefined()
+    expect(updated['citas']).toBeUndefined()
+  })
+
+  // ── 4d. First tap wins bloqueo lock: side-effect (citas INSERT) runs ──────────
+  it('bloqueo first tap wins CAS (count:1) → citas insert runs', async () => {
+    const pending = {
+      id: 'rp-bloqueo-win',
       action_type: 'bloqueo',
       ejecutada: false,
       expira_at: new Date(Date.now() + 3600_000).toISOString(),
@@ -341,16 +420,14 @@ describe('TOCTOU fix — atomic ejecutada guard', () => {
     const { POST } = await loadRoute()
     await POST(makeRequest({
       callback_query: {
-        id: 'cq-bloqueo-toctou',
-        data: 'kelly_confirm_rp-bloqueo-toctou',
+        id: 'cq-bloqueo-win',
+        data: 'kelly_confirm_rp-bloqueo-win',
         message: { message_id: 1, chat: { id: 999 } },
       },
     }))
 
-    const pendingUpdates = updated['pending_kelly_actions'] ?? []
-    const markExecuted = pendingUpdates.find((u) => u.payload?.ejecutada === true)
-    expect(markExecuted).toBeTruthy()
-    expect(markExecuted.filters['ejecutada']).toBe(false)
+    const citasInserts = inserted['citas'] ?? []
+    expect(citasInserts.length).toBeGreaterThan(0)
   })
 })
 
