@@ -54,6 +54,12 @@ describe('decideAgentResponse', () => {
     expect(d.reason).toBe('manual_expired')
   })
 
+  it('en el borde exacto (manual_until === ahora) se considera expirado → responde', () => {
+    const d = decideAgentResponse({ agenteActivoGlobal: true, mode: 'manual', manualUntil: NOW.toISOString(), now: NOW })
+    expect(d.respond).toBe(true)
+    expect(d.reason).toBe('manual_expired')
+  })
+
   it('NO responde en modo personal (defensivo)', () => {
     const d = decideAgentResponse({ agenteActivoGlobal: true, mode: 'personal', now: NOW })
     expect(d.respond).toBe(false)

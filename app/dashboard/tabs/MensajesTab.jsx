@@ -417,9 +417,11 @@ export function MensajesTab() {
                     ? 'Modo PERSONAL — Sofía no responde'
                     : activeConvData.mode === 'manual'
                       ? 'Modo MANUAL — Sofía silenciada temporalmente'
-                      : activeConvData.estado === 'activa' && !activeConvData.handoff_activo
-                        ? 'Sofía está atendiéndolo (Agente Activo)'
-                        : activeConvData.handoff_activo ? 'Esperando respuesta manual' : 'Chat inactivo'}
+                      : !agenteActivo
+                        ? 'Sofía pausada globalmente — no responde'
+                        : activeConvData.estado === 'activa' && !activeConvData.handoff_activo
+                          ? 'Sofía está atendiéndolo (Agente Activo)'
+                          : activeConvData.handoff_activo ? 'Esperando respuesta manual' : 'Chat inactivo'}
                 </p>
               </div>
 
