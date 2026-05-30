@@ -10,6 +10,7 @@
     "test:coverage": "vitest run --coverage",
     "test:watch": "vitest",
     "test:selftest": "node test/selftest.mjs",
+    "test:deno": "deno test --allow-env --allow-net --allow-read --no-check --node-modules-dir=auto supabase/functions/agent-runner/__tests__/",
     "lint": "next lint"
   },
   "dependencies": {
