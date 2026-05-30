@@ -84,6 +84,19 @@ supabase functions deploy enviar-recordatorios
 
 ---
 
+## 🧪 Tests
+
+El proyecto tiene dos suites de pruebas que corren en **CI (GitHub Actions)** en cada push a `main` y en cada PR:
+
+```bash
+npm test          # Vitest: lógica de lib/ y rutas Next.js (entorno Node)
+npm run test:deno # Deno: tests de las Edge Functions (supabase/functions/agent-runner/__tests__)
+```
+
+> **Nota sobre `test:deno`:** los tests de las Edge Functions corren bajo **Deno** (no bajo Vitest), porque ese es el runtime real de las funciones. El script usa `--allow-env --allow-net --allow-read` — el `--allow-read` es necesario porque algunos tests (p. ej. `payment-flow-await.test.ts`) leen el código fuente con `Deno.readTextFile`. Requiere tener [Deno](https://deno.com) instalado localmente.
+
+---
+
 ## 📂 Estructura del Proyecto
 
 *   `app/`: Directorio principal de ruteo de Next.js (CRM Dashboard, API webhooks, Auth).
