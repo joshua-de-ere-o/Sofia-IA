@@ -237,6 +237,22 @@ function guayaquilParts() {
   return { fecha, hora, weekday, legible: `${weekday} ${fecha}, ${hora} Quito` };
 }
 
+/**
+ * Return a short Spanish day label for a YYYY-MM-DD date string.
+ * Uses new Date(year, monthIndex, day) — local constructor — to avoid the UTC
+ * midnight shift that new Date('YYYY-MM-DD') would cause in UTC-offset runtimes.
+ * @param {string} fecha - 'YYYY-MM-DD'
+ * @returns {string} e.g. 'Mar 2 jun'
+ */
+function formatDiaCorto(fecha) {
+  const [y, m, d] = fecha.split('-').map(Number)
+  // Local constructor: no timezone shift — same weekday regardless of TZ offset
+  const dt = new Date(y, m - 1, d)
+  const DIAS = ['Dom', 'Lun', 'Mar', 'Mié', 'Jue', 'Vie', 'Sáb']
+  const MESES = ['ene', 'feb', 'mar', 'abr', 'may', 'jun', 'jul', 'ago', 'sep', 'oct', 'nov', 'dic']
+  return `${DIAS[dt.getDay()]} ${d} ${MESES[m - 1]}`
+}
+
 async function esPrimerMensajeDelDia(fechaQuito) {
   const desde = `${fechaQuito}T00:00:00-05:00`;
   const hasta = `${fechaQuito}T23:59:59-05:00`;
@@ -525,16 +541,37 @@ async function toolBuscarCitasBulk({ zona, fecha_desde, fecha_hasta, estado }) {
     )
   }
 
-  // Format candidate list for Kely — no PII in logs, only in message to operator
+  // Format candidate list for Kely — grouped by day, no raw UUIDs
+  const MESES_CORTO = ['ene', 'feb', 'mar', 'abr', 'may', 'jun', 'jul', 'ago', 'sep', 'oct', 'nov', 'dic']
+  const zonaLabel = zona
+    ? zona.charAt(0).toUpperCase() + zona.slice(1)
+    : 'Todas las zonas'
+
+  // Build a readable date range for the header
+  const [dy, dm, dd] = fecha_desde.split('-').map(Number)
+  const [hy, hm, hd] = fecha_hasta.split('-').map(Number)
+  const rangeLabel = (fecha_desde === fecha_hasta)
+    ? `${dd} ${MESES_CORTO[dm - 1]}`
+    : `${dd} al ${hd} ${MESES_CORTO[hm - 1]}`
+
+  const citaWord = citas.length === 1 ? 'cita' : 'citas'
   const lines = [
-    `📋 Citas activas (${citas.length}) — ${fecha_desde} al ${fecha_hasta}${zona ? ` · ${zona}` : ''}:`,
-    '',
+    `📋 ${zonaLabel} · ${rangeLabel} · ${citas.length} ${citaWord}`,
   ]
+
+  // Group citas by fecha and emit a day-header per group
+  let lastFecha = null
   for (const c of citas) {
+    if (c.fecha !== lastFecha) {
+      if (lastFecha !== null) lines.push('') // blank line between day groups
+      lines.push(`🗓 ${formatDiaCorto(c.fecha)}`)
+      lastFecha = c.fecha
+    }
     const hora = (c.hora || '').slice(0, 5)
-    const duracion = c.duracion_min ? ` ${c.duracion_min}min` : ''
+    const duracion = c.duracion_min ? ` · ${c.duracion_min} min` : ''
     const nombre = c.pacientes?.nombre || c.patient_name_normalized || '(sin nombre)'
-    lines.push(`• ${c.fecha} ${hora}${duracion} — ${nombre} [${c.zona}] (${c.estado}) — ID: ${c.id}`)
+    const estadoMarker = (c.estado && c.estado !== 'confirmada') ? ` · ⏳ ${c.estado}` : ''
+    lines.push(`   • ${hora} — ${nombre}${duracion}${estadoMarker}`)
   }
 
   await sendToKely(lines.join('\n'))

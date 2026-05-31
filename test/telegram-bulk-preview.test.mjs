@@ -111,11 +111,13 @@ describe('B-1a toolBuscarCitasBulk — happy-path: returns candidate list', () =
     expect(sendCalls.length).toBeGreaterThanOrEqual(1)
 
     const text = JSON.parse(sendCalls[0].opts.body).text
-    // cita_id or shorthand, fecha, hora, zona, paciente all visible
+    // paciente name, time, and day-header are all visible in the new grouped format
     expect(text).toMatch(/María Prado/)
-    expect(text).toMatch(/2026-06-10/)
+    // fecha appears in the day-group header as abbreviated form (e.g. "10 jun")
+    expect(text).toMatch(/10 jun/)
     expect(text).toMatch(/08:00/)
-    expect(text).toMatch(/sur/)
+    // zona appears in the header line
+    expect(text).toMatch(/Sur/)
   })
 
   it('filter without zona returns all active citas in date range', async () => {
@@ -220,6 +222,235 @@ describe('B-1d toolBuscarCitasBulk — default path calls .not() with BULK_EXCLU
       'in',
       '(cancelada,no_show,rechazada)',
     )
+  })
+})
+
+// ─── B-1f: formatDiaCorto unit tests ──────────────────────────────────────────
+
+// We test the helper by importing it from the route source.
+// The route is a Next.js module with side-effects (env reads, etc.),
+// so we rely on the compiled export via loadRoute, but for a pure unit test
+// we extract and eval the helper in isolation using a regex + eval approach.
+// Safer: load route and expose via a named export... but route doesn't export it.
+// Instead we parse it directly from source for a zero-import unit test.
+
+describe('B-1f formatDiaCorto — pure date helper (no UTC shift)', () => {
+  let formatDiaCorto
+
+  beforeEach(() => {
+    const source = readFileSync(routePath, 'utf8')
+    // Extract the function body by finding it in the source
+    const match = source.match(/function formatDiaCorto\s*\([^)]*\)\s*\{[\s\S]*?\n\}/)
+    if (!match) throw new Error('formatDiaCorto not found in route.js')
+    // eslint-disable-next-line no-new-func
+    formatDiaCorto = new Function(`return (${match[0]})`)()
+  })
+
+  it('formats 2026-06-02 as "Mar 2 jun"', () => {
+    expect(formatDiaCorto('2026-06-02')).toBe('Mar 2 jun')
+  })
+
+  it('formats 2026-06-05 as "Vie 5 jun"', () => {
+    expect(formatDiaCorto('2026-06-05')).toBe('Vie 5 jun')
+  })
+
+  it('formats 2026-01-01 as "Jue 1 ene"', () => {
+    expect(formatDiaCorto('2026-01-01')).toBe('Jue 1 ene')
+  })
+
+  it('formats 2026-11-07 as "Sáb 7 nov"', () => {
+    expect(formatDiaCorto('2026-11-07')).toBe('Sáb 7 nov')
+  })
+
+  // UTC off-by-one trap: '2026-06-02' parsed as UTC midnight → in UTC-5
+  // it would still be 2026-06-01 (Mon), not Tue. Using local Date constructor
+  // (new Date(y, m, d)) avoids this.
+  it('2026-06-02 is Martes regardless of local timezone (no UTC shift bug)', () => {
+    // This date is Tuesday. If the implementation uses new Date('2026-06-02')
+    // in a UTC-5 environment, that parses to Mon Jun 01 20:00 local → Monday = wrong.
+    // Correct local constructor gives Tuesday.
+    expect(formatDiaCorto('2026-06-02')).toMatch(/^Mar /)
+  })
+})
+
+// ─── B-1g: New formatted output assertions ────────────────────────────────────
+
+describe('B-1g toolBuscarCitasBulk — new day-grouped format', () => {
+  it('header line contains zona, date range and cita count', async () => {
+    setAdapterResponse({
+      tool: 'buscar_citas_bulk',
+      args: { zona: 'sur', fecha_desde: '2026-06-02', fecha_hasta: '2026-06-07' },
+    })
+
+    const candidatos = [
+      { id: 'c-h01', fecha: '2026-06-02', hora: '15:00:00', zona: 'sur', estado: 'confirmada', duracion_min: 30, patient_name_normalized: null, pacientes: { nombre: 'Klever Rodríguez' } },
+      { id: 'c-h02', fecha: '2026-06-05', hora: '10:00:00', zona: 'sur', estado: 'confirmada', duracion_min: 30, patient_name_normalized: null, pacientes: { nombre: 'Darwin Vega' } },
+    ]
+
+    mockFrom.mockImplementation((table) => {
+      if (table === 'citas') return makeBuilder(table, candidatos)
+      return makeBuilder(table, [])
+    })
+
+    const { POST } = await loadRoute()
+    await POST(makeRequest({ message: { text: 'citas sur 2 al 7 junio', chat: { id: 999 } } }))
+
+    const text = JSON.parse(getCapturedFetches().filter((f) => f.url.includes('sendMessage'))[0].opts.body).text
+
+    // Header contains emoji, zona, range and count
+    expect(text).toMatch(/📋/)
+    expect(text).toMatch(/Sur/)
+    expect(text).toMatch(/2 citas/)
+  })
+
+  it('day-group headers use 🗓 emoji with abbreviated Spanish weekday and month', async () => {
+    setAdapterResponse({
+      tool: 'buscar_citas_bulk',
+      args: { zona: 'sur', fecha_desde: '2026-06-02', fecha_hasta: '2026-06-07' },
+    })
+
+    const candidatos = [
+      { id: 'c-d01', fecha: '2026-06-02', hora: '15:00:00', zona: 'sur', estado: 'confirmada', duracion_min: 30, patient_name_normalized: null, pacientes: { nombre: 'Klever Rodríguez' } },
+      { id: 'c-d02', fecha: '2026-06-05', hora: '10:00:00', zona: 'sur', estado: 'confirmada', duracion_min: 30, patient_name_normalized: null, pacientes: { nombre: 'Darwin Vega' } },
+    ]
+
+    mockFrom.mockImplementation((table) => {
+      if (table === 'citas') return makeBuilder(table, candidatos)
+      return makeBuilder(table, [])
+    })
+
+    const { POST } = await loadRoute()
+    await POST(makeRequest({ message: { text: 'citas sur junio', chat: { id: 999 } } }))
+
+    const text = JSON.parse(getCapturedFetches().filter((f) => f.url.includes('sendMessage'))[0].opts.body).text
+
+    expect(text).toMatch(/🗓/)
+    expect(text).toMatch(/Mar 2 jun/)
+    expect(text).toMatch(/Vie 5 jun/)
+  })
+
+  it('per-cita lines use "HH:MM — name · N min" format', async () => {
+    setAdapterResponse({
+      tool: 'buscar_citas_bulk',
+      args: { zona: 'sur', fecha_desde: '2026-06-02', fecha_hasta: '2026-06-02' },
+    })
+
+    const candidatos = [
+      { id: 'c-p01', fecha: '2026-06-02', hora: '15:00:00', zona: 'sur', estado: 'confirmada', duracion_min: 30, patient_name_normalized: null, pacientes: { nombre: 'Klever Rodríguez' } },
+    ]
+
+    mockFrom.mockImplementation((table) => {
+      if (table === 'citas') return makeBuilder(table, candidatos)
+      return makeBuilder(table, [])
+    })
+
+    const { POST } = await loadRoute()
+    await POST(makeRequest({ message: { text: 'citas sur 2 jun', chat: { id: 999 } } }))
+
+    const text = JSON.parse(getCapturedFetches().filter((f) => f.url.includes('sendMessage'))[0].opts.body).text
+
+    expect(text).toMatch(/15:00 — Klever Rodríguez · 30 min/)
+  })
+
+  it('raw UUID is NOT present in the output', async () => {
+    setAdapterResponse({
+      tool: 'buscar_citas_bulk',
+      args: { zona: 'sur', fecha_desde: '2026-06-02', fecha_hasta: '2026-06-02' },
+    })
+
+    const candidatos = [
+      { id: 'c-uuid-test-abcd-1234', fecha: '2026-06-02', hora: '09:00:00', zona: 'sur', estado: 'confirmada', duracion_min: 45, patient_name_normalized: null, pacientes: { nombre: 'Test Paciente' } },
+    ]
+
+    mockFrom.mockImplementation((table) => {
+      if (table === 'citas') return makeBuilder(table, candidatos)
+      return makeBuilder(table, [])
+    })
+
+    const { POST } = await loadRoute()
+    await POST(makeRequest({ message: { text: 'citas', chat: { id: 999 } } }))
+
+    const text = JSON.parse(getCapturedFetches().filter((f) => f.url.includes('sendMessage'))[0].opts.body).text
+
+    expect(text).not.toMatch(/c-uuid-test-abcd-1234/)
+    expect(text).not.toMatch(/ID:/)
+  })
+
+  it('confirmada estado is NOT printed; other estados show ⏳ marker', async () => {
+    setAdapterResponse({
+      tool: 'buscar_citas_bulk',
+      args: { fecha_desde: '2026-06-10', fecha_hasta: '2026-06-10' },
+    })
+
+    const candidatos = [
+      { id: 'c-e01', fecha: '2026-06-10', hora: '09:00:00', zona: 'sur', estado: 'confirmada',           duracion_min: 30, patient_name_normalized: null, pacientes: { nombre: 'Paciente A' } },
+      { id: 'c-e02', fecha: '2026-06-10', hora: '10:00:00', zona: 'sur', estado: 'pendiente_pago',       duracion_min: 30, patient_name_normalized: null, pacientes: { nombre: 'Paciente B' } },
+      { id: 'c-e03', fecha: '2026-06-10', hora: '11:00:00', zona: 'sur', estado: 'confirmada_provisional', duracion_min: 30, patient_name_normalized: null, pacientes: { nombre: 'Paciente C' } },
+    ]
+
+    mockFrom.mockImplementation((table) => {
+      if (table === 'citas') return makeBuilder(table, candidatos)
+      return makeBuilder(table, [])
+    })
+
+    const { POST } = await loadRoute()
+    await POST(makeRequest({ message: { text: 'citas 10 junio', chat: { id: 999 } } }))
+
+    const text = JSON.parse(getCapturedFetches().filter((f) => f.url.includes('sendMessage'))[0].opts.body).text
+
+    // confirmada: no estado label in that line
+    expect(text).not.toMatch(/confirmada[^_]/)
+    // non-confirmada: marker present
+    expect(text).toMatch(/⏳ pendiente_pago/)
+    expect(text).toMatch(/⏳ confirmada_provisional/)
+  })
+
+  it('single-day range shows one date in header (not "X al Y")', async () => {
+    setAdapterResponse({
+      tool: 'buscar_citas_bulk',
+      args: { fecha_desde: '2026-06-10', fecha_hasta: '2026-06-10' },
+    })
+
+    const candidatos = [
+      { id: 'c-s01', fecha: '2026-06-10', hora: '08:00:00', zona: 'norte', estado: 'confirmada', duracion_min: 45, patient_name_normalized: null, pacientes: { nombre: 'Sola Dia' } },
+    ]
+
+    mockFrom.mockImplementation((table) => {
+      if (table === 'citas') return makeBuilder(table, candidatos)
+      return makeBuilder(table, [])
+    })
+
+    const { POST } = await loadRoute()
+    await POST(makeRequest({ message: { text: 'citas 10 junio', chat: { id: 999 } } }))
+
+    const text = JSON.parse(getCapturedFetches().filter((f) => f.url.includes('sendMessage'))[0].opts.body).text
+
+    // Header should contain "10 jun" but NOT "al" (range indicator)
+    expect(text).toMatch(/📋/)
+    expect(text).not.toMatch(/al/)
+  })
+
+  it('"Todas las zonas" shown in header when no zona filter applied', async () => {
+    setAdapterResponse({
+      tool: 'buscar_citas_bulk',
+      args: { fecha_desde: '2026-06-10', fecha_hasta: '2026-06-12' },
+    })
+
+    const candidatos = [
+      { id: 'c-z01', fecha: '2026-06-10', hora: '09:00:00', zona: 'virtual', estado: 'confirmada', duracion_min: 30, patient_name_normalized: null, pacientes: { nombre: 'Sin Zona' } },
+    ]
+
+    mockFrom.mockImplementation((table) => {
+      if (table === 'citas') return makeBuilder(table, candidatos)
+      return makeBuilder(table, [])
+    })
+
+    const { POST } = await loadRoute()
+    await POST(makeRequest({ message: { text: 'todas las citas', chat: { id: 999 } } }))
+
+    const text = JSON.parse(getCapturedFetches().filter((f) => f.url.includes('sendMessage'))[0].opts.body).text
+
+    expect(text).toMatch(/Todas las zonas/)
   })
 })
 
