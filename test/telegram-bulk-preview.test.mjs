@@ -13,7 +13,7 @@
 
 import { readFileSync } from 'node:fs'
 import { resolve } from 'node:path'
-import { describe, it, expect, beforeEach, afterEach } from 'vitest'
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import {
   mockFrom,
   setupTelegramMocks,
@@ -63,8 +63,8 @@ describe('B-1a toolBuscarCitasBulk — happy-path: returns candidate list', () =
     })
 
     const candidatos = [
-      { id: 'c-001', paciente_nombre: 'Ana Torres', fecha: '2026-06-02', hora: '09:00:00', zona: 'norte', estado: 'confirmada', duracion_min: 45 },
-      { id: 'c-002', paciente_nombre: 'Luis Vera',  fecha: '2026-06-04', hora: '11:00:00', zona: 'norte', estado: 'pendiente', duracion_min: 60 },
+      { id: 'c-001', fecha: '2026-06-02', hora: '09:00:00', zona: 'norte', estado: 'confirmada', duracion_min: 45, patient_name_normalized: null,  pacientes: { nombre: 'Ana Torres' } },
+      { id: 'c-002', fecha: '2026-06-04', hora: '11:00:00', zona: 'norte', estado: 'pendiente', duracion_min: 60, patient_name_normalized: null,  pacientes: { nombre: 'Luis Vera' } },
     ]
 
     mockFrom.mockImplementation((table) => {
@@ -96,7 +96,7 @@ describe('B-1a toolBuscarCitasBulk — happy-path: returns candidate list', () =
     })
 
     const candidatos = [
-      { id: 'c-010', paciente_nombre: 'María Prado', fecha: '2026-06-10', hora: '08:00:00', zona: 'sur', estado: 'confirmada', duracion_min: 45 },
+      { id: 'c-010', fecha: '2026-06-10', hora: '08:00:00', zona: 'sur', estado: 'confirmada', duracion_min: 45, patient_name_normalized: null, pacientes: { nombre: 'María Prado' } },
     ]
 
     mockFrom.mockImplementation((table) => {
@@ -125,8 +125,8 @@ describe('B-1a toolBuscarCitasBulk — happy-path: returns candidate list', () =
     })
 
     const candidatos = [
-      { id: 'c-020', paciente_nombre: 'Jorge Lima', fecha: '2026-06-01', hora: '10:00:00', zona: 'virtual', estado: 'confirmada', duracion_min: 45 },
-      { id: 'c-021', paciente_nombre: 'Rosa Mora', fecha: '2026-06-01', hora: '14:00:00', zona: 'norte',   estado: 'pendiente', duracion_min: 60 },
+      { id: 'c-020', fecha: '2026-06-01', hora: '10:00:00', zona: 'virtual', estado: 'confirmada', duracion_min: 45, patient_name_normalized: null, pacientes: { nombre: 'Jorge Lima' } },
+      { id: 'c-021', fecha: '2026-06-01', hora: '14:00:00', zona: 'norte',   estado: 'pendiente', duracion_min: 60, patient_name_normalized: null, pacientes: { nombre: 'Rosa Mora' } },
     ]
 
     mockFrom.mockImplementation((table) => {
@@ -220,6 +220,39 @@ describe('B-1d toolBuscarCitasBulk — default path calls .not() with BULK_EXCLU
       'in',
       '(cancelada,no_show,rechazada)',
     )
+  })
+})
+
+// ─── B-1e: Contractual regression — select string uses pacientes embed, NOT paciente_nombre ─
+
+describe('B-1e contractual regression — buscar_citas_bulk select string', () => {
+  it('select string contains "pacientes" embed and does NOT contain "paciente_nombre"', async () => {
+    setAdapterResponse({
+      tool: 'buscar_citas_bulk',
+      args: { fecha_desde: '2026-06-01', fecha_hasta: '2026-06-07' },
+    })
+
+    let capturedSelectArg = null
+    mockFrom.mockImplementation((table) => {
+      const b = makeBuilder(table, [])
+      if (table === 'citas') {
+        const originalSelect = b.select.bind(b)
+        b.select = vi.fn((...args) => {
+          capturedSelectArg = args[0]
+          return originalSelect(...args)
+        })
+      }
+      return b
+    })
+
+    const { POST } = await loadRoute()
+    await POST(makeRequest({ message: { text: 'citas junio', chat: { id: 999 } } }))
+
+    expect(capturedSelectArg).not.toBeNull()
+    // Must embed pacientes to resolve the patient name
+    expect(capturedSelectArg).toMatch(/pacientes/)
+    // Must NOT select the phantom column that causes the prod 400
+    expect(capturedSelectArg).not.toMatch(/paciente_nombre/)
   })
 })
 
