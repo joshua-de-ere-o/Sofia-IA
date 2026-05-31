@@ -199,6 +199,8 @@ Tools disponibles:
 - cancelar_cita_kelly { "nombre_paciente": str, "fecha"?: "YYYY-MM-DD" }
 - crear_bloqueo_agenda { "fecha": "YYYY-MM-DD", "hora": "HH:MM", "duracion_min": int, "motivo": str }
 - agendar_evento_personal { "motivo": str, "fecha": "YYYY-MM-DD", "hora": "HH:MM", "duracion_min"?: int, "recordar_min_antes"?: int }
+- buscar_citas_bulk { "fecha_desde": "YYYY-MM-DD", "fecha_hasta": "YYYY-MM-DD", "zona"?: "sur|norte|virtual|valle|domicilio|santo_domingo", "estado"?: [str] }
+  // Busca citas activas en un rango de fechas, con zona opcional. Úsala antes de proponer reagendamientos masivos. No crea ni modifica datos.
 - crear_tarea { "descripcion": str, "fecha_hora_iso": "YYYY-MM-DDTHH:MM:SS-05:00" }
 - responder_texto { "texto": str }  // para aclaraciones, preguntas a Kely, saludo del día
 
@@ -296,6 +298,7 @@ async function handleKellyMessage(text) {
     switch (parsed.tool) {
       case 'consultar_agenda':        await toolConsultarAgenda(args); break;
       case 'consultar_finanzas':      await toolConsultarFinanzas(args); break;
+      case 'buscar_citas_bulk':       await toolBuscarCitasBulk(args); break;
       case 'reagendar_cita_kelly':    toolResult = await toolReagendarCita(args); break;
       case 'cancelar_cita_kelly':     toolResult = await toolCancelarCita(args); break;
       case 'crear_bloqueo_agenda':    toolResult = await toolCrearBloqueo(args); break;
@@ -435,6 +438,89 @@ async function buscarCitasDePaciente(pacienteId, fechaActual) {
   const { data, error } = await query;
   if (error) throw error;
   return data || [];
+}
+
+// ─── Bulk filter tool ─────────────────────────────────────────────────────────
+
+// Active states: exclude terminal/inactive states per REQ-S2-01
+const BULK_EXCLUDED_STATES = ['cancelada', 'no_show', 'rechazada']
+
+/**
+ * Query active citas in a date range, optionally filtered by zona.
+ * Returns a formatted candidate list or a clarification if no results.
+ *
+ * This tool is operator-only (Telegram lane). It is unreachable from the
+ * patient/WhatsApp lane because handleKellyMessage is exclusively triggered
+ * by the Telegram webhook, gated by TELEGRAM_CHAT_ID.
+ *
+ * REQ-S2-01, REQ-S2-02, REQ-S2-03
+ *
+ * @param {{ zona?: string, fecha_desde: string, fecha_hasta: string, estado?: string[] }} args
+ *
+ * WARNING: passing an explicit `estado[]` override REPLACES the default
+ * BULK_EXCLUDED_STATES exclusion entirely. The rebuilt query uses `.in('estado', estado)`
+ * instead of `.not(...)`, so a caller CAN include terminal states (cancelada, no_show,
+ * rechazada) if they pass them explicitly. Omit `estado` to get the safe default.
+ */
+async function toolBuscarCitasBulk({ zona, fecha_desde, fecha_hasta, estado }) {
+  if (!fecha_desde || !fecha_hasta) {
+    return sendToKely('⚠️ Necesito fecha_desde y fecha_hasta (YYYY-MM-DD) para buscar citas.')
+  }
+
+  // Build query — RLS-safe via service role; no patient PII in logs
+  let query = supabase
+    .from('citas')
+    .select('id, paciente_nombre, fecha, hora, zona, estado, duracion_min')
+    .gte('fecha', fecha_desde)
+    .lte('fecha', fecha_hasta)
+    .not('estado', 'in', `(${BULK_EXCLUDED_STATES.join(',')})`)
+    .order('fecha', { ascending: true })
+    .order('hora', { ascending: true })
+
+  if (zona) {
+    query = query.eq('zona', zona)
+  }
+
+  // Caller may override the excluded states (e.g. include 'cancelada' for review)
+  if (Array.isArray(estado) && estado.length > 0) {
+    query = supabase
+      .from('citas')
+      .select('id, paciente_nombre, fecha, hora, zona, estado, duracion_min')
+      .gte('fecha', fecha_desde)
+      .lte('fecha', fecha_hasta)
+      .in('estado', estado)
+      .order('fecha', { ascending: true })
+      .order('hora', { ascending: true })
+
+    if (zona) {
+      query = query.eq('zona', zona)
+    }
+  }
+
+  const { data: citas, error } = await query
+  if (error) throw error
+
+  if (!citas || citas.length === 0) {
+    // REQ-S2-02: empty result → clarification, no side effects
+    const zonaStr = zona ? ` en zona ${zona}` : ''
+    return sendToKely(
+      `🔍 No encontré citas activas${zonaStr} entre ${fecha_desde} y ${fecha_hasta}. ` +
+      `Podés ampliar el rango de fechas o cambiar la zona.`
+    )
+  }
+
+  // Format candidate list for Kely — no PII in logs, only in message to operator
+  const lines = [
+    `📋 Citas activas (${citas.length}) — ${fecha_desde} al ${fecha_hasta}${zona ? ` · ${zona}` : ''}:`,
+    '',
+  ]
+  for (const c of citas) {
+    const hora = (c.hora || '').slice(0, 5)
+    const duracion = c.duracion_min ? ` ${c.duracion_min}min` : ''
+    lines.push(`• ${c.fecha} ${hora}${duracion} — ${c.paciente_nombre} [${c.zona}] (${c.estado}) — ID: ${c.id}`)
+  }
+
+  await sendToKely(lines.join('\n'))
 }
 
 async function toolReagendarCita({ nombre_paciente, nueva_fecha, nueva_hora, fecha_actual }) {
