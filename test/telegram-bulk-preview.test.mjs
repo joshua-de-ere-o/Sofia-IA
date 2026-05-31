@@ -278,3 +278,251 @@ describe('B-1c operator-only guard — buscar_citas_bulk unreachable from patien
     expect(sendCalls).toHaveLength(0)
   })
 })
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// C-1: reagendar_bulk PREVIEW tests (all failing until C-3 GREEN)
+// REQ-S3-01, REQ-S3-02, REQ-S5-02 / AC-03, AC-04
+// ═══════════════════════════════════════════════════════════════════════════════
+
+// Helper: build a BulkItem
+function makeBulkItem(n) {
+  return {
+    cita_id: `cita-${n}`,
+    fecha_original: '2026-06-10',
+    hora_original: '09:00',
+    nueva_fecha: `2026-06-1${n}`,
+    nueva_hora: '10:00',
+    duracion_min: 45,
+  }
+}
+
+// ─── C-1a: Source contract — toolReagendarBulkPreview exists ──────────────────
+
+describe('C-1 source contract — toolReagendarBulkPreview defined in route.js', () => {
+  it('toolReagendarBulkPreview function is defined', () => {
+    const source = readFileSync(routePath, 'utf8')
+    expect(source).toMatch(/async function toolReagendarBulkPreview\s*\(/)
+  })
+
+  it('KELLY_SYSTEM_PROMPT includes reagendar_bulk tool entry', () => {
+    const source = readFileSync(routePath, 'utf8')
+    expect(source).toMatch(/reagendar_bulk/)
+  })
+
+  it('dispatcher switch includes reagendar_bulk case', () => {
+    const source = readFileSync(routePath, 'utf8')
+    expect(source).toMatch(/case\s+'reagendar_bulk'/)
+  })
+
+  it('MAX_BULK_ITEMS constant is defined exactly once', () => {
+    const source = readFileSync(routePath, 'utf8')
+    const matches = [...source.matchAll(/MAX_BULK_ITEMS\s*=/g)]
+    expect(matches).toHaveLength(1)
+  })
+
+  it('no .changes references remain in route.js', () => {
+    const source = readFileSync(routePath, 'utf8')
+    // Must not have .changes on OperatorPreview (keyboard is the correct field)
+    expect(source).not.toMatch(/\.changes\b/)
+  })
+})
+
+// ─── C-1b: Happy-path: N ≤ 12 items → 1 pending row INSERT ───────────────────
+
+describe('C-1b toolReagendarBulkPreview — happy path: inserts ONE pending row', () => {
+  it('inserts exactly one pending_kelly_actions row with action_type reagendar_bulk', async () => {
+    const items = [makeBulkItem(1), makeBulkItem(2), makeBulkItem(3)]
+
+    setAdapterResponse({
+      tool: 'reagendar_bulk',
+      args: { items },
+    })
+
+    // citas returns occupied rows for overlap check (not conflicting with nueva_hora 10:00)
+    mockFrom.mockImplementation((table) => {
+      if (table === 'citas') return makeBuilder(table, [])
+      if (table === 'pending_kelly_actions') return makeBuilder(table, [{ id: 'new-bulk-id' }])
+      return makeBuilder(table, [])
+    })
+
+    const { POST } = await loadRoute()
+    await POST(makeRequest({ message: { text: 'reagenda estas 3 citas', chat: { id: 999 } } }))
+
+    const pendingInserts = getInserted()['pending_kelly_actions']
+    expect(pendingInserts).toBeTruthy()
+    expect(pendingInserts).toHaveLength(1)
+    expect(pendingInserts[0].action_type).toBe('reagendar_bulk')
+    expect(Array.isArray(pendingInserts[0].args.items)).toBe(true)
+    expect(pendingInserts[0].args.items).toHaveLength(3)
+  })
+
+  it('each item in args.items carries cita_id, nueva_fecha, nueva_hora, duracion_min', async () => {
+    const items = [makeBulkItem(1)]
+
+    setAdapterResponse({ tool: 'reagendar_bulk', args: { items } })
+
+    mockFrom.mockImplementation((table) => {
+      if (table === 'citas') return makeBuilder(table, [])
+      if (table === 'pending_kelly_actions') return makeBuilder(table, [{ id: 'bulk-id' }])
+      return makeBuilder(table, [])
+    })
+
+    const { POST } = await loadRoute()
+    await POST(makeRequest({ message: { text: 'reagenda cita', chat: { id: 999 } } }))
+
+    const row = getInserted()['pending_kelly_actions'][0]
+    const item = row.args.items[0]
+    expect(item).toMatchObject({
+      cita_id: 'cita-1',
+      nueva_fecha: '2026-06-11',
+      nueva_hora: '10:00',
+      duracion_min: 45,
+    })
+  })
+
+  it('Telegram receives one sendMessage with inline_keyboard (keyboard field)', async () => {
+    const items = [makeBulkItem(1), makeBulkItem(2)]
+
+    setAdapterResponse({ tool: 'reagendar_bulk', args: { items } })
+
+    mockFrom.mockImplementation((table) => {
+      if (table === 'citas') return makeBuilder(table, [])
+      if (table === 'pending_kelly_actions') return makeBuilder(table, [{ id: 'bulk-id' }])
+      return makeBuilder(table, [])
+    })
+
+    const { POST } = await loadRoute()
+    await POST(makeRequest({ message: { text: 'reagenda 2 citas', chat: { id: 999 } } }))
+
+    const sendCalls = getCapturedFetches().filter((f) => f.url.includes('sendMessage'))
+    expect(sendCalls.length).toBeGreaterThanOrEqual(1)
+    const body = JSON.parse(sendCalls[0].opts.body)
+    expect(body.reply_markup?.inline_keyboard).toBeTruthy()
+  })
+})
+
+// ─── C-1c: Summary truncation with (+N más) ───────────────────────────────────
+
+describe('C-1c summary truncation — (+N más) when near 4096-char limit', () => {
+  it('truncates summary with "(+N más)" when rendered summary would exceed 4096 chars', async () => {
+    // Build 12 items with very long patient names to force truncation
+    const items = Array.from({ length: 12 }, (_, i) => ({
+      cita_id: `cita-${i}`,
+      fecha_original: '2026-06-10',
+      hora_original: '09:00',
+      nueva_fecha: `2026-06-${String(i + 10).padStart(2, '0')}`,
+      nueva_hora: '10:00',
+      duracion_min: 45,
+      paciente_nombre: 'Nombre Muy Largo Para Forzar Truncamiento Del Summary ' + 'X'.repeat(300),
+    }))
+
+    setAdapterResponse({ tool: 'reagendar_bulk', args: { items } })
+
+    mockFrom.mockImplementation((table) => {
+      if (table === 'citas') return makeBuilder(table, [])
+      if (table === 'pending_kelly_actions') return makeBuilder(table, [{ id: 'bulk-id' }])
+      return makeBuilder(table, [])
+    })
+
+    const { POST } = await loadRoute()
+    await POST(makeRequest({ message: { text: 'reagenda todo', chat: { id: 999 } } }))
+
+    const sendCalls = getCapturedFetches().filter((f) => f.url.includes('sendMessage'))
+    expect(sendCalls.length).toBeGreaterThanOrEqual(1)
+    const body = JSON.parse(sendCalls[0].opts.body)
+    // Either fits fine OR is truncated with (+N más)
+    expect(body.text.length).toBeLessThanOrEqual(4096)
+    // If truncated, must contain the truncation marker
+    if (body.text.length < items.length * 50) {
+      expect(body.text).toMatch(/\(\+\d+ más\)/)
+    }
+  })
+})
+
+// ─── C-1d: Over-cap rejection (> MAX_BULK_ITEMS) ─────────────────────────────
+
+describe('C-1d toolReagendarBulkPreview — over-cap: reject, no INSERT', () => {
+  it('rejects when items.length > 12 and creates no pending row', async () => {
+    const items = Array.from({ length: 13 }, (_, i) => makeBulkItem(i))
+
+    setAdapterResponse({ tool: 'reagendar_bulk', args: { items } })
+
+    mockFrom.mockImplementation((table) => makeBuilder(table, []))
+
+    const { POST } = await loadRoute()
+    await POST(makeRequest({ message: { text: 'reagenda 13 citas', chat: { id: 999 } } }))
+
+    const pendingInserts = getInserted()['pending_kelly_actions']
+    expect(pendingInserts).toBeFalsy()
+
+    // Should send a clarification message
+    const sendCalls = getCapturedFetches().filter((f) => f.url.includes('sendMessage'))
+    expect(sendCalls.length).toBeGreaterThanOrEqual(1)
+    const body = JSON.parse(sendCalls[0].opts.body)
+    expect(body.reply_markup?.inline_keyboard).toBeFalsy()
+  })
+})
+
+// ─── C-1e: Empty items list → clarification, no INSERT ────────────────────────
+
+describe('C-1e toolReagendarBulkPreview — empty items: reject, no INSERT', () => {
+  it('rejects when items is empty array and creates no pending row', async () => {
+    setAdapterResponse({ tool: 'reagendar_bulk', args: { items: [] } })
+
+    mockFrom.mockImplementation((table) => makeBuilder(table, []))
+
+    const { POST } = await loadRoute()
+    await POST(makeRequest({ message: { text: 'reagenda (vacío)', chat: { id: 999 } } }))
+
+    const pendingInserts = getInserted()['pending_kelly_actions']
+    expect(pendingInserts).toBeFalsy()
+
+    const sendCalls = getCapturedFetches().filter((f) => f.url.includes('sendMessage'))
+    expect(sendCalls.length).toBeGreaterThanOrEqual(1)
+    const body = JSON.parse(sendCalls[0].opts.body)
+    expect(body.reply_markup?.inline_keyboard).toBeFalsy()
+  })
+})
+
+// ─── C-1f: Overlap collision → clarification, no INSERT ──────────────────────
+
+describe('C-1f toolReagendarBulkPreview — overlap collision: reject, no INSERT', () => {
+  it('rejects when a target slot overlaps an existing cita and creates no pending row', async () => {
+    // Item targets 2026-06-11 10:00 (45 min) → conflicts with existing cita below
+    const items = [{
+      cita_id: 'cita-999',
+      fecha_original: '2026-06-10',
+      hora_original: '09:00',
+      nueva_fecha: '2026-06-11',
+      nueva_hora: '10:00',
+      duracion_min: 45,
+    }]
+
+    setAdapterResponse({ tool: 'reagendar_bulk', args: { items } })
+
+    // Existing cita occupies 2026-06-11 10:15 (overlaps with 10:00-10:45)
+    const conflictingCita = {
+      id: 'existing-cita',
+      fecha: '2026-06-11',
+      hora: '10:15:00',
+      duracion_min: 45,
+      estado: 'confirmada',
+    }
+
+    mockFrom.mockImplementation((table) => {
+      if (table === 'citas') return makeBuilder(table, [conflictingCita])
+      return makeBuilder(table, [])
+    })
+
+    const { POST } = await loadRoute()
+    await POST(makeRequest({ message: { text: 'reagenda cita con conflicto', chat: { id: 999 } } }))
+
+    const pendingInserts = getInserted()['pending_kelly_actions']
+    expect(pendingInserts).toBeFalsy()
+
+    const sendCalls = getCapturedFetches().filter((f) => f.url.includes('sendMessage'))
+    expect(sendCalls.length).toBeGreaterThanOrEqual(1)
+    const body = JSON.parse(sendCalls[0].opts.body)
+    expect(body.reply_markup?.inline_keyboard).toBeFalsy()
+  })
+})

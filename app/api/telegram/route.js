@@ -16,6 +16,12 @@ import { getModelAdapter } from '@/lib/model-adapter';
 import { sendWhatsAppMessage } from '../../../lib/ycloud.js';
 import { WAME_DEFAULT_PRESET } from '../../../lib/telegram.js';
 import { makePolicy, mergeOperatorOverrides } from '../../../lib/actor-policy.js';
+import {
+  buildOccupiedRanges,
+  rangesOverlap,
+  timeToMinutes,
+  addMinutesToTime,
+} from '../../../lib/availability/slot-generator.js';
 
 const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL || '';
 const supabaseServiceKey = process.env.SUPABASE_SERVICE_ROLE_KEY || '';
@@ -166,6 +172,11 @@ async function handleListoCommand() {
   }
 }
 
+// ─── Bulk constants ───────────────────────────────────────────────────────────
+
+/** Maximum number of citas allowed in a single bulk reschedule request (REQ-S3-02). */
+const MAX_BULK_ITEMS = 12
+
 // ─── Modo-Kelly: dispatcher LLM con tools ─────────────────────────────────────
 
 const KELLY_SYSTEM_PROMPT = `Eres Sofía, asistente de la Dra. Kely León (nutrióloga, Quito, Ecuador).
@@ -201,6 +212,8 @@ Tools disponibles:
 - agendar_evento_personal { "motivo": str, "fecha": "YYYY-MM-DD", "hora": "HH:MM", "duracion_min"?: int, "recordar_min_antes"?: int }
 - buscar_citas_bulk { "fecha_desde": "YYYY-MM-DD", "fecha_hasta": "YYYY-MM-DD", "zona"?: "sur|norte|virtual|valle|domicilio|santo_domingo", "estado"?: [str] }
   // Busca citas activas en un rango de fechas, con zona opcional. Úsala antes de proponer reagendamientos masivos. No crea ni modifica datos.
+- reagendar_bulk { "items": [ { "cita_id": str, "fecha_original": "YYYY-MM-DD", "hora_original": "HH:MM", "nueva_fecha": "YYYY-MM-DD", "nueva_hora": "HH:MM", "duracion_min": int } ] }
+  // Reagenda múltiples citas en un solo paso. Máximo ${MAX_BULK_ITEMS} ítems. Primero usa buscar_citas_bulk para obtener los IDs y duraciones. Crea un preview con botón de confirmación — no aplica nada de inmediato.
 - crear_tarea { "descripcion": str, "fecha_hora_iso": "YYYY-MM-DDTHH:MM:SS-05:00" }
 - responder_texto { "texto": str }  // para aclaraciones, preguntas a Kely, saludo del día
 
@@ -299,6 +312,7 @@ async function handleKellyMessage(text) {
       case 'consultar_agenda':        await toolConsultarAgenda(args); break;
       case 'consultar_finanzas':      await toolConsultarFinanzas(args); break;
       case 'buscar_citas_bulk':       await toolBuscarCitasBulk(args); break;
+      case 'reagendar_bulk':          toolResult = await toolReagendarBulkPreview(args); break;
       case 'reagendar_cita_kelly':    toolResult = await toolReagendarCita(args); break;
       case 'cancelar_cita_kelly':     toolResult = await toolCancelarCita(args); break;
       case 'crear_bloqueo_agenda':    toolResult = await toolCrearBloqueo(args); break;
@@ -440,8 +454,6 @@ async function buscarCitasDePaciente(pacienteId, fechaActual) {
   return data || [];
 }
 
-// ─── Bulk filter tool ─────────────────────────────────────────────────────────
-
 // Active states: exclude terminal/inactive states per REQ-S2-01
 const BULK_EXCLUDED_STATES = ['cancelada', 'no_show', 'rechazada']
 
@@ -521,6 +533,129 @@ async function toolBuscarCitasBulk({ zona, fecha_desde, fecha_hasta, estado }) {
   }
 
   await sendToKely(lines.join('\n'))
+}
+
+// ─── Bulk reschedule preview tool ────────────────────────────────────────────
+
+/**
+ * Create a single pending_kelly_actions row for a bulk reschedule request.
+ *
+ * Validates:
+ *   - items.length > 0 and items.length <= MAX_BULK_ITEMS (REQ-S3-02)
+ *   - No target slot overlaps an existing cita via slot-generator (REQ-S3-01)
+ *
+ * On success: INSERTs one pending row (action_type='reagendar_bulk') and returns
+ * an OperatorPreview so the dispatcher sends a single Telegram message with buttons.
+ *
+ * REQ-S3-01, REQ-S3-02 / AC-03, AC-04
+ *
+ * @param {{ items: Array<{cita_id:string,fecha_original:string,hora_original:string,nueva_fecha:string,nueva_hora:string,duracion_min:number}> }} args
+ * @returns {Promise<OperatorToolResult>}
+ */
+async function toolReagendarBulkPreview({ items }) {
+  // ── Validation: empty or over-cap ───────────────────────────────────────────
+  if (!Array.isArray(items) || items.length === 0) {
+    return sendToKely('⚠️ La lista de citas está vacía. Indicá las citas a reagendar.')
+  }
+  if (items.length > MAX_BULK_ITEMS) {
+    return sendToKely(
+      `⚠️ Demasiadas citas (${items.length}). El máximo es ${MAX_BULK_ITEMS} por reagendamiento masivo. ` +
+      `Dividí la solicitud en bloques más pequeños.`
+    )
+  }
+
+  // ── Validation: overlap check at preview time ────────────────────────────────
+  // Fetch all citas on the target dates to build occupied ranges
+  const targetDates = [...new Set(items.map((i) => i.nueva_fecha))]
+  const { data: existingCitas, error: fetchError } = await supabase
+    .from('citas')
+    .select('id, fecha, hora, duracion_min, estado')
+    .in('fecha', targetDates)
+  if (fetchError) throw fetchError
+
+  // Build occupied ranges (excludes terminal states)
+  const occupied = buildOccupiedRanges(existingCitas || [])
+
+  for (const item of items) {
+    const { nueva_fecha, nueva_hora, duracion_min, cita_id } = item
+    const startMin = timeToMinutes(nueva_hora)
+    const endTime = addMinutesToTime(nueva_hora, Number(duracion_min) > 0 ? Number(duracion_min) : 30)
+    const endMin = timeToMinutes(endTime)
+
+    const conflict = occupied.some((range) => {
+      if (range.fecha !== nueva_fecha) return false
+      // Exclude the cita being moved (its own original slot is being freed)
+      return rangesOverlap(startMin, endMin, timeToMinutes(range.start), timeToMinutes(range.end))
+    })
+
+    if (conflict) {
+      return sendToKely(
+        `⚠️ Conflicto de horario: la cita ${cita_id} quiere moverse a ${nueva_fecha} ${nueva_hora} ` +
+        `pero ese horario está ocupado. Revisá la disponibilidad antes de reagendar.`
+      )
+    }
+  }
+
+  // ── INSERT one pending row ───────────────────────────────────────────────────
+  const paciente_nombres = items.map((i) => i.paciente_nombre || i.cita_id)
+  const { data: pending, error: insertError } = await supabase
+    .from('pending_kelly_actions')
+    .insert({
+      action_type: 'reagendar_bulk',
+      args: { items, paciente_nombres },
+    })
+    .select('id')
+    .single()
+  if (insertError) throw insertError
+
+  // ── Build summary (truncate at 4096 chars with (+N más)) ────────────────────
+  const previewId = pending?.id || 'unknown'
+  const headerLines = [
+    `📋 Reagendamiento masivo — ${items.length} cita${items.length !== 1 ? 's' : ''}:`,
+    '',
+  ]
+  const itemLines = items.map((item, idx) =>
+    `${idx + 1}. Cita ${item.cita_id} — ${item.fecha_original} ${item.hora_original} → ${item.nueva_fecha} ${item.nueva_hora}` +
+    (item.paciente_nombre ? ` (${item.paciente_nombre})` : '')
+  )
+  const footer = '\n¿Confirmás el reagendamiento de todas las citas?'
+
+  const MAX_CHARS = 4096
+  const header = headerLines.join('\n')
+  let body = itemLines.join('\n')
+  const fullText = `${header}\n${body}${footer}`
+
+  let summaryText = fullText
+  if (fullText.length > MAX_CHARS) {
+    // Trim item lines until it fits, then append (+N más)
+    let shown = 0
+    let bodyAccum = ''
+    for (const line of itemLines) {
+      const candidate = `${header}\n${bodyAccum}${bodyAccum ? '\n' : ''}${line}`
+      const remaining = items.length - shown - 1
+      const truncMarker = remaining > 0 ? `\n(+${remaining} más)` : ''
+      if ((candidate + truncMarker + footer).length > MAX_CHARS) break
+      bodyAccum = bodyAccum ? `${bodyAccum}\n${line}` : line
+      shown++
+    }
+    const remaining = items.length - shown
+    const truncMarker = remaining > 0 ? `\n(+${remaining} más)` : ''
+    summaryText = `${header}\n${bodyAccum}${truncMarker}${footer}`
+  }
+
+  /** @type {OperatorPreview} */
+  return {
+    kind: 'preview',
+    actionType: 'reagendar_bulk',
+    previewId,
+    summary: summaryText,
+    keyboard: [
+      [
+        { text: '✅ Confirmar reagendamiento', callback_data: `kelly_confirm_${previewId}` },
+        { text: '❌ Cancelar', callback_data: `kelly_cancel_${previewId}` },
+      ],
+    ],
+  }
 }
 
 async function toolReagendarCita({ nombre_paciente, nueva_fecha, nueva_hora, fecha_actual }) {
@@ -1076,7 +1211,36 @@ async function resolveKellyPending(pendingId, confirmar) {
 
   // We won the lock for confirm: execute the side-effect exactly once.
   try {
-    if (pending.action_type === 'reagendar') {
+    if (pending.action_type === 'reagendar_bulk') {
+      // ── Best-effort bulk apply: iterate items, collect per-item results ──────
+      // CAS lock already won above. Each cita.update() is independent — no
+      // Postgres transaction wraps the loop (Supabase REST calls). Continue on
+      // individual failure (REQ-S3-04 best-effort + per-item report).
+      const { items = [] } = pending.args;
+      const results = [];
+      for (const item of items) {
+        const { cita_id, nueva_fecha, nueva_hora } = item;
+        const { error: e } = await supabase
+          .from('citas')
+          .update({ fecha: nueva_fecha, hora: nueva_hora })
+          .eq('id', cita_id);
+        results.push({ cita_id, ok: !e, error: e?.message });
+      }
+      const applied = results.filter((r) => r.ok).length;
+      const failed  = results.filter((r) => !r.ok).length;
+      if (failed === 0) {
+        return { kind: 'result', status: 'applied', message: `✅ ${applied} cita${applied !== 1 ? 's' : ''} reagendada${applied !== 1 ? 's' : ''}.` };
+      }
+      const failList = results
+        .filter((r) => !r.ok)
+        .map((r) => `• ${r.cita_id}: ${r.error || 'error desconocido'}`)
+        .join('\n');
+      return {
+        kind: 'result',
+        status: 'applied',
+        message: `✅ ${applied} reagendada${applied !== 1 ? 's' : ''} / ⚠️ ${failed} fallaron:\n${failList}`,
+      };
+    } else if (pending.action_type === 'reagendar') {
       const { cita_id, nueva_fecha, nueva_hora } = pending.args;
       const { error: e } = await supabase
         .from('citas')
