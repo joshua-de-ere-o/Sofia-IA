@@ -480,9 +480,13 @@ async function toolBuscarCitasBulk({ zona, fecha_desde, fecha_hasta, estado }) {
   }
 
   // Build query — RLS-safe via service role; no patient PII in logs
+  // Use a LEFT embed for pacientes so citas without a linked patient are not dropped.
+  // patient_name_normalized is included as a fallback for imported rows.
+  const SELECT_COLS = 'id, fecha, hora, zona, estado, duracion_min, patient_name_normalized, pacientes(nombre)'
+
   let query = supabase
     .from('citas')
-    .select('id, paciente_nombre, fecha, hora, zona, estado, duracion_min')
+    .select(SELECT_COLS)
     .gte('fecha', fecha_desde)
     .lte('fecha', fecha_hasta)
     .not('estado', 'in', `(${BULK_EXCLUDED_STATES.join(',')})`)
@@ -497,7 +501,7 @@ async function toolBuscarCitasBulk({ zona, fecha_desde, fecha_hasta, estado }) {
   if (Array.isArray(estado) && estado.length > 0) {
     query = supabase
       .from('citas')
-      .select('id, paciente_nombre, fecha, hora, zona, estado, duracion_min')
+      .select(SELECT_COLS)
       .gte('fecha', fecha_desde)
       .lte('fecha', fecha_hasta)
       .in('estado', estado)
@@ -529,7 +533,8 @@ async function toolBuscarCitasBulk({ zona, fecha_desde, fecha_hasta, estado }) {
   for (const c of citas) {
     const hora = (c.hora || '').slice(0, 5)
     const duracion = c.duracion_min ? ` ${c.duracion_min}min` : ''
-    lines.push(`• ${c.fecha} ${hora}${duracion} — ${c.paciente_nombre} [${c.zona}] (${c.estado}) — ID: ${c.id}`)
+    const nombre = c.pacientes?.nombre || c.patient_name_normalized || '(sin nombre)'
+    lines.push(`• ${c.fecha} ${hora}${duracion} — ${nombre} [${c.zona}] (${c.estado}) — ID: ${c.id}`)
   }
 
   await sendToKely(lines.join('\n'))
