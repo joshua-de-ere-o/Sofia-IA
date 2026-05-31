@@ -23,7 +23,7 @@ const supabase = createClient(supabaseUrl, supabaseServiceKey);
 
 /**
  * @typedef {{ kind: 'clarification', message: string }} OperatorClarification
- * @typedef {{ kind: 'preview', actionType: string, previewId: string, summary: string, changes: unknown[] }} OperatorPreview
+ * @typedef {{ kind: 'preview', actionType: string, previewId: string, summary: string, keyboard: unknown[] }} OperatorPreview
  * @typedef {{ kind: 'result', status: 'applied' | 'cancelled' | 'failed' | 'already', message: string }} OperatorResult
  * @typedef {OperatorClarification | OperatorPreview | OperatorResult} OperatorToolResult
  */
@@ -308,7 +308,7 @@ async function handleKellyMessage(text) {
     }
     // Dispatcher: consume preview return and drive the Telegram send from one place.
     if (toolResult?.kind === 'preview') {
-      await sendToKelyWithButtons(toolResult.summary, toolResult.changes);
+      await sendToKelyWithButtons(toolResult.summary, toolResult.keyboard);
     }
   } catch (err) {
     console.error(`[Telegram/kelly] Error en tool ${parsed.tool}:`, err?.message || err);
@@ -478,13 +478,13 @@ async function toolReagendarCita({ nombre_paciente, nueva_fecha, nueva_hora, fec
     `De: ${cita.fecha} ${(cita.hora || '').slice(0, 5)}`,
     `A: ${nueva_fecha} ${nueva_hora}`,
   ].join('\n');
-  /** @type {import('../../../lib/actor-policy.js').OperatorPreview} */
+  /** @type {OperatorPreview} */
   return {
     kind: 'preview',
     actionType: 'reagendar',
     previewId: pending.id,
     summary,
-    changes: [
+    keyboard: [
       [
         { text: '✅ Sí, reagendar', callback_data: `kelly_confirm_${pending.id}` },
         { text: '❌ No', callback_data: `kelly_cancel_${pending.id}` },
@@ -529,13 +529,13 @@ async function toolCancelarCita({ nombre_paciente, fecha }) {
     `Paciente: ${paciente.nombre}`,
     `${cita.fecha} ${(cita.hora || '').slice(0, 5)} — ${cita.servicio || ''}`,
   ].join('\n');
-  /** @type {import('../../../lib/actor-policy.js').OperatorPreview} */
+  /** @type {OperatorPreview} */
   return {
     kind: 'preview',
     actionType: 'cancelar',
     previewId: pending.id,
     summary,
-    changes: [
+    keyboard: [
       [
         { text: '✅ Sí, cancelar', callback_data: `kelly_confirm_${pending.id}` },
         { text: '↩️ No', callback_data: `kelly_cancel_${pending.id}` },
@@ -562,13 +562,13 @@ async function toolCrearBloqueo({ fecha, hora, duracion_min, motivo }) {
     `${fecha} ${hora} — ${duracion_min} min`,
     `Motivo: ${motivo}`,
   ].join('\n');
-  /** @type {import('../../../lib/actor-policy.js').OperatorPreview} */
+  /** @type {OperatorPreview} */
   return {
     kind: 'preview',
     actionType: 'bloqueo',
     previewId: pending.id,
     summary,
-    changes: [
+    keyboard: [
       [
         { text: '✅ Sí, bloquear', callback_data: `kelly_confirm_${pending.id}` },
         { text: '❌ No', callback_data: `kelly_cancel_${pending.id}` },
@@ -634,13 +634,13 @@ async function toolAgendarEventoPersonal(rawArgs, policy) {
     `${fecha} ${hora} — ${duracion} min`,
     recordar > 0 ? `Recordatorio: ${recordar} min antes` : 'Sin recordatorio',
   ].join('\n');
-  /** @type {import('../../../lib/actor-policy.js').OperatorPreview} */
+  /** @type {OperatorPreview} */
   return {
     kind: 'preview',
     actionType: 'evento_personal',
     previewId: pending.id,
     summary,
-    changes: [
+    keyboard: [
       [
         { text: '✅ Sí, agendar', callback_data: `kelly_confirm_${pending.id}` },
         { text: '❌ No', callback_data: `kelly_cancel_${pending.id}` },
