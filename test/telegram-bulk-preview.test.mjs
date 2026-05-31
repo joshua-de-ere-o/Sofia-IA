@@ -399,6 +399,37 @@ describe('C-1b toolReagendarBulkPreview — happy path: inserts ONE pending row'
     const body = JSON.parse(sendCalls[0].opts.body)
     expect(body.reply_markup?.inline_keyboard).toBeTruthy()
   })
+
+  it('summary shows paciente_nombre when provided in item contract (FIX-2: name visible in preview)', async () => {
+    // The LLM prompt now includes paciente_nombre in the reagendar_bulk item contract.
+    // When the LLM passes it, the summary must display the real name.
+    const items = [{
+      cita_id: 'cita-name-1',
+      paciente_nombre: 'Valentina Cruz',
+      fecha_original: '2026-06-10',
+      hora_original: '09:00',
+      nueva_fecha: '2026-06-12',
+      nueva_hora: '11:00',
+      duracion_min: 45,
+    }]
+
+    setAdapterResponse({ tool: 'reagendar_bulk', args: { items } })
+
+    mockFrom.mockImplementation((table) => {
+      if (table === 'citas') return makeBuilder(table, [])
+      if (table === 'pending_kelly_actions') return makeBuilder(table, [{ id: 'name-bulk-id' }])
+      return makeBuilder(table, [])
+    })
+
+    const { POST } = await loadRoute()
+    await POST(makeRequest({ message: { text: 'reagenda cita Valentina', chat: { id: 999 } } }))
+
+    const sendCalls = getCapturedFetches().filter((f) => f.url.includes('sendMessage'))
+    expect(sendCalls.length).toBeGreaterThanOrEqual(1)
+    const text = JSON.parse(sendCalls[0].opts.body).text
+    // Name must appear in the summary (not just the cita_id fallback)
+    expect(text).toMatch(/Valentina Cruz/)
+  })
 })
 
 // ─── C-1c: Summary truncation with (+N más) ───────────────────────────────────
@@ -524,5 +555,51 @@ describe('C-1f toolReagendarBulkPreview — overlap collision: reject, no INSERT
     expect(sendCalls.length).toBeGreaterThanOrEqual(1)
     const body = JSON.parse(sendCalls[0].opts.body)
     expect(body.reply_markup?.inline_keyboard).toBeFalsy()
+  })
+})
+
+// ─── C-1g: Self-collision — moving to different time on same day MUST be accepted ─
+
+describe('C-1g toolReagendarBulkPreview — self-collision excluded: same-day rescheduling accepted', () => {
+  it('ACCEPTS a cita moved to a different time on its own date when the only "conflict" is its original slot', async () => {
+    // cita-self is originally at 2026-06-15 09:00 (45 min).
+    // It is being moved to 2026-06-15 14:00.
+    // The citas table returns the cita's OWN current slot for that date.
+    // Without self-exclusion this would trigger a false positive collision.
+    const items = [{
+      cita_id: 'cita-self',
+      fecha_original: '2026-06-15',
+      hora_original: '09:00',
+      nueva_fecha: '2026-06-15',
+      nueva_hora: '14:00',
+      duracion_min: 45,
+    }]
+
+    setAdapterResponse({ tool: 'reagendar_bulk', args: { items } })
+
+    // The DB returns the cita's own current row — the only "occupied" slot is itself.
+    // After the fix, this row must be EXCLUDED from collision detection.
+    const ownCita = {
+      id: 'cita-self',        // same id as cita_id in the batch
+      fecha: '2026-06-15',
+      hora: '14:15:00',       // overlaps new slot 14:00-14:45 IF not excluded
+      duracion_min: 45,
+      estado: 'confirmada',
+    }
+
+    mockFrom.mockImplementation((table) => {
+      if (table === 'citas') return makeBuilder(table, [ownCita])
+      if (table === 'pending_kelly_actions') return makeBuilder(table, [{ id: 'self-bulk-id' }])
+      return makeBuilder(table, [])
+    })
+
+    const { POST } = await loadRoute()
+    await POST(makeRequest({ message: { text: 'mueve cita al mismo día otra hora', chat: { id: 999 } } }))
+
+    // Must INSERT a pending row (accepted, not rejected as self-collision)
+    const pendingInserts = getInserted()['pending_kelly_actions']
+    expect(pendingInserts).toBeTruthy()
+    expect(pendingInserts).toHaveLength(1)
+    expect(pendingInserts[0].action_type).toBe('reagendar_bulk')
   })
 })

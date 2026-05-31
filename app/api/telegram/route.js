@@ -212,8 +212,8 @@ Tools disponibles:
 - agendar_evento_personal { "motivo": str, "fecha": "YYYY-MM-DD", "hora": "HH:MM", "duracion_min"?: int, "recordar_min_antes"?: int }
 - buscar_citas_bulk { "fecha_desde": "YYYY-MM-DD", "fecha_hasta": "YYYY-MM-DD", "zona"?: "sur|norte|virtual|valle|domicilio|santo_domingo", "estado"?: [str] }
   // Busca citas activas en un rango de fechas, con zona opcional. Úsala antes de proponer reagendamientos masivos. No crea ni modifica datos.
-- reagendar_bulk { "items": [ { "cita_id": str, "fecha_original": "YYYY-MM-DD", "hora_original": "HH:MM", "nueva_fecha": "YYYY-MM-DD", "nueva_hora": "HH:MM", "duracion_min": int } ] }
-  // Reagenda múltiples citas en un solo paso. Máximo ${MAX_BULK_ITEMS} ítems. Primero usa buscar_citas_bulk para obtener los IDs y duraciones. Crea un preview con botón de confirmación — no aplica nada de inmediato.
+- reagendar_bulk { "items": [ { "cita_id": str, "paciente_nombre"?: str, "fecha_original": "YYYY-MM-DD", "hora_original": "HH:MM", "nueva_fecha": "YYYY-MM-DD", "nueva_hora": "HH:MM", "duracion_min": int } ] }
+  // Reagenda múltiples citas en un solo paso. Máximo ${MAX_BULK_ITEMS} ítems. Incluí "paciente_nombre" (disponible en el resultado de buscar_citas_bulk) para que el resumen muestre el nombre real del paciente. Primero usa buscar_citas_bulk para obtener los IDs, nombres y duraciones. Crea un preview con botón de confirmación — no aplica nada de inmediato.
 - crear_tarea { "descripcion": str, "fecha_hora_iso": "YYYY-MM-DDTHH:MM:SS-05:00" }
 - responder_texto { "texto": str }  // para aclaraciones, preguntas a Kely, saludo del día
 
@@ -565,7 +565,10 @@ async function toolReagendarBulkPreview({ items }) {
   }
 
   // ── Validation: overlap check at preview time ────────────────────────────────
-  // Fetch all citas on the target dates to build occupied ranges
+  // Fetch all citas on the target dates to build occupied ranges.
+  // We also need the ids so we can exclude the batch's own citas (their current
+  // slots are being vacated — treating them as occupied would cause a false
+  // self-collision when moving a cita to a different time on the same day).
   const targetDates = [...new Set(items.map((i) => i.nueva_fecha))]
   const { data: existingCitas, error: fetchError } = await supabase
     .from('citas')
@@ -573,8 +576,16 @@ async function toolReagendarBulkPreview({ items }) {
     .in('fecha', targetDates)
   if (fetchError) throw fetchError
 
-  // Build occupied ranges (excludes terminal states)
-  const occupied = buildOccupiedRanges(existingCitas || [])
+  // Build the set of cita ids being moved so we can skip their current rows.
+  const batchCitaIds = new Set(items.map((i) => i.cita_id))
+
+  // Build occupied ranges (excludes terminal states AND the batch's own citas).
+  // Known limitation: inter-sibling target collisions (two items in the same
+  // batch targeting overlapping slots) are NOT checked here — the DB unique
+  // constraint or a follow-up validation would be needed to catch those.
+  const occupied = buildOccupiedRanges(
+    (existingCitas || []).filter((c) => !batchCitaIds.has(c.id))
+  )
 
   for (const item of items) {
     const { nueva_fecha, nueva_hora, duracion_min, cita_id } = item
@@ -584,7 +595,6 @@ async function toolReagendarBulkPreview({ items }) {
 
     const conflict = occupied.some((range) => {
       if (range.fecha !== nueva_fecha) return false
-      // Exclude the cita being moved (its own original slot is being freed)
       return rangesOverlap(startMin, endMin, timeToMinutes(range.start), timeToMinutes(range.end))
     })
 
@@ -1228,13 +1238,20 @@ async function resolveKellyPending(pendingId, confirmar) {
       }
       const applied = results.filter((r) => r.ok).length;
       const failed  = results.filter((r) => !r.ok).length;
-      if (failed === 0) {
-        return { kind: 'result', status: 'applied', message: `✅ ${applied} cita${applied !== 1 ? 's' : ''} reagendada${applied !== 1 ? 's' : ''}.` };
-      }
       const failList = results
         .filter((r) => !r.ok)
         .map((r) => `• ${r.cita_id}: ${r.error || 'error desconocido'}`)
         .join('\n');
+      if (applied === 0) {
+        return {
+          kind: 'result',
+          status: 'failed',
+          message: `⚠️ No se pudo reagendar ninguna cita (${failed} fallaron):\n${failList}`,
+        };
+      }
+      if (failed === 0) {
+        return { kind: 'result', status: 'applied', message: `✅ ${applied} cita${applied !== 1 ? 's' : ''} reagendada${applied !== 1 ? 's' : ''}.` };
+      }
       return {
         kind: 'result',
         status: 'applied',

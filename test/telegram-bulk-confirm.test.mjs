@@ -192,11 +192,16 @@ describe('C-2b resolveKellyPending(reagendar_bulk) — partial failure: best-eff
     expect(text).toMatch(/⚠️/)
   })
 
-  it('does NOT rollback applied items when a later item fails', async () => {
-    const items = [makeBulkItem(1), makeBulkItem(2)]
+  it('does NOT rollback applied items when a later item fails — exactly N-1 updates applied', async () => {
+    // 3 items: items 1 and 3 succeed, item 2 fails.
+    // After the run: exactly 2 cita updates must be recorded (the non-failing ones),
+    // and none of those updates should be a compensating revert (no segunda pasada).
+    const items = [makeBulkItem(1), makeBulkItem(2), makeBulkItem(3)]
     const pendingRow = makePendingBulkRow({ items })
 
     let citaUpdateCallCount = 0
+    // Track what was actually applied: collect successful (nueva_fecha, nueva_hora) payloads
+    const appliedPayloads = []
 
     mockFrom.mockImplementation((table) => {
       if (table === 'pending_kelly_actions') {
@@ -206,6 +211,7 @@ describe('C-2b resolveKellyPending(reagendar_bulk) — partial failure: best-eff
         citaUpdateCallCount++
         const callNumber = citaUpdateCallCount
         if (callNumber === 2) {
+          // Item 2 fails
           const b = makeBuilder(table, [])
           const failBuilder = {
             eq: vi.fn().mockReturnThis(),
@@ -216,10 +222,20 @@ describe('C-2b resolveKellyPending(reagendar_bulk) — partial failure: best-eff
               return (resolve) => resolve({ data: null, error: { message: 'fail' }, count: 0 })
             },
           })
-          b.update = vi.fn(() => failBuilder)
+          b.update = vi.fn((payload) => {
+            // failing item — do NOT push to appliedPayloads
+            return failBuilder
+          })
           return b
         }
-        return makeBuilder(table, [{ id: 'ok' }])
+        // Items 1 and 3 succeed — capture their payloads
+        const b = makeBuilder(table, [{ id: 'ok' }])
+        const origUpdate = b.update.bind(b)
+        b.update = vi.fn((payload) => {
+          appliedPayloads.push(payload)
+          return origUpdate(payload)
+        })
+        return b
       }
       return makeBuilder(table, [])
     })
@@ -233,12 +249,78 @@ describe('C-2b resolveKellyPending(reagendar_bulk) — partial failure: best-eff
       },
     }))
 
-    // First item update was attempted (not rolled back)
-    expect(citaUpdateCallCount).toBe(2)
-    // Only the 1 failed — no rollback update of item 1
+    // All 3 items were attempted (best-effort loop iterates all)
+    expect(citaUpdateCallCount).toBe(3)
+
+    // Exactly N-1 = 2 updates were successfully applied (items 1 and 3)
+    expect(appliedPayloads).toHaveLength(2)
+
+    // The applied payloads carry the new schedule (nueva_fecha/nueva_hora) —
+    // not a revert back to fecha_original/hora_original
+    expect(appliedPayloads[0]).toMatchObject({ fecha: makeBulkItem(1).nueva_fecha, hora: makeBulkItem(1).nueva_hora })
+    expect(appliedPayloads[1]).toMatchObject({ fecha: makeBulkItem(3).nueva_fecha, hora: makeBulkItem(3).nueva_hora })
+
+    // The DB record count reflects 3 attempts (not 4 or 5 from rollback compensations)
     const citaUpdates = getUpdated()['citas']
-    // Item 1 update was NOT followed by a compensating update
     expect(citaUpdates).toBeTruthy()
+    // getUpdated() tracks ALL update payloads; with no rollback, it must be exactly 2
+    // (the 2 successful ones — the failed builder doesn't reach getUpdated)
+    expect(citaUpdates.length).toBe(2)
+  })
+})
+
+// ─── C-2b-z: All items fail — zero-applied message (FIX 3) ──────────────────
+
+describe('C-2b-z resolveKellyPending(reagendar_bulk) — all items fail: ⚠️ message, no ✅ 0', () => {
+  it('returns ⚠️ no se pudo reagendar ninguna (not ✅ 0) when all items fail', async () => {
+    const items = [makeBulkItem(1), makeBulkItem(2)]
+    const pendingRow = makePendingBulkRow({ items })
+
+    mockFrom.mockImplementation((table) => {
+      if (table === 'pending_kelly_actions') {
+        return makeBuilder(table, [pendingRow])
+      }
+      if (table === 'citas') {
+        // Every cita update fails
+        const b = makeBuilder(table, [])
+        const failBuilder = {
+          eq: vi.fn().mockReturnThis(),
+          select: vi.fn().mockReturnThis(),
+        }
+        Object.defineProperty(failBuilder, 'then', {
+          get() {
+            return (resolve) => resolve({ data: null, error: { message: 'DB down' }, count: 0 })
+          },
+        })
+        b.update = vi.fn(() => failBuilder)
+        return b
+      }
+      return makeBuilder(table, [])
+    })
+
+    const { POST } = await loadRoute()
+    await POST(makeRequest({
+      callback_query: {
+        id: 'cq-zero',
+        data: 'kelly_confirm_pending-bulk-001',
+        message: { chat: { id: 999 }, message_id: 42 },
+      },
+    }))
+
+    const toastCalls = getCapturedFetches().filter((f) => f.url.includes('answerCallbackQuery'))
+    expect(toastCalls.length).toBeGreaterThanOrEqual(1)
+    const text = JSON.parse(toastCalls[0].opts.body).text
+
+    // Must NOT show "✅ 0" (confusing success icon with zero applied)
+    expect(text).not.toMatch(/✅\s*0/)
+
+    // Must show the clear "no se pudo reagendar ninguna" warning message
+    expect(text).toMatch(/⚠️/)
+    expect(text).toMatch(/ninguna/i)
+
+    // Must still include the per-item failure list
+    expect(text).toMatch(/cita-1/)
+    expect(text).toMatch(/cita-2/)
   })
 })
 
