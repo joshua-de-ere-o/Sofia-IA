@@ -678,11 +678,20 @@ describe('PR2b: clearKellyContext on reagendar_bulk confirm', () => {
       }
       if (table === 'citas') {
         // All updates fail → applied === 0
+        // The update chain must support .eq().select('id') (work-first rows-verify)
+        const eqFn = vi.fn().mockReturnThis()
+        const failUpdateBuilder = {
+          eq: eqFn,
+          select: vi.fn().mockResolvedValue({ data: null, error: { message: 'DB error' }, count: 0 }),
+        }
+        Object.defineProperty(failUpdateBuilder, 'then', {
+          get() {
+            return (resolve) => resolve({ data: null, error: { message: 'DB error' }, count: 0 })
+          },
+        })
         return {
           ...makeBuilder(table, []),
-          update: vi.fn().mockReturnValue({
-            eq: vi.fn().mockResolvedValue({ data: null, error: { message: 'DB error' } }),
-          }),
+          update: vi.fn().mockReturnValue(failUpdateBuilder),
         }
       }
       return makeBuilder(table, [])

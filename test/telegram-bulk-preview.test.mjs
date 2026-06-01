@@ -728,6 +728,76 @@ describe('C-1b toolReagendarBulkPreview — happy path: inserts ONE pending row'
     // Name must appear in the summary (not just the cita_id fallback)
     expect(text).toMatch(/Valentina Cruz/)
   })
+
+  it('preview format is human-readable: patient name + short day + legible time, NO raw UUID', async () => {
+    // FIX (post-merge cosmetic): the preview must read like a person, not a DB row.
+    // Old format leaked the cita_id UUID and used ISO date+seconds. New format:
+    //   "1. Valentina Cruz\n   Mié 10 jun 09:00 → Vie 12 jun 11:00"
+    const items = [{
+      cita_id: '4bf28dc8-5610-4fe2-9c03-29465cbc5537',
+      paciente_nombre: 'Valentina Cruz',
+      fecha_original: '2026-06-10',
+      hora_original: '09:00',
+      nueva_fecha: '2026-06-12',
+      nueva_hora: '11:00',
+      duracion_min: 45,
+    }]
+
+    setAdapterResponse({ tool: 'reagendar_bulk', args: { items } })
+
+    const activeCitas = [{ id: items[0].cita_id, estado: 'confirmada', fecha: '2026-06-10', hora: '09:00:00', duracion_min: 45 }]
+
+    mockFrom.mockImplementation((table) => {
+      if (table === 'citas') return makeBuilder(table, activeCitas)
+      if (table === 'pending_kelly_actions') return makeBuilder(table, [{ id: 'fmt-bulk-id' }])
+      return makeBuilder(table, [])
+    })
+
+    const { POST } = await loadRoute()
+    await POST(makeRequest({ message: { text: 'movela', chat: { id: 999 } } }))
+
+    const sendCalls = getCapturedFetches().filter((f) => f.url.includes('sendMessage'))
+    const text = JSON.parse(sendCalls[0].opts.body).text
+    // The raw UUID must NOT be shown to the operator.
+    expect(text).not.toMatch(/4bf28dc8-5610-4fe2-9c03-29465cbc5537/)
+    // Patient name leads the line.
+    expect(text).toMatch(/Valentina Cruz/)
+    // Short, localized day labels (not ISO 2026-06-10) for both origin and destino.
+    expect(text).toMatch(/Mié 10 jun/)
+    expect(text).toMatch(/Vie 12 jun/)
+    // Legible HH:MM times (no trailing :00 seconds).
+    expect(text).toMatch(/09:00 →/)
+    expect(text).not.toMatch(/09:00:00/)
+  })
+
+  it('same-day move shows destino as hora-only (no repeated day label)', async () => {
+    // "Lun 1 jun 15:00 → 17:00" — when the day does not change, only the new hora shows.
+    const items = [{
+      cita_id: 'cita-sameday',
+      paciente_nombre: 'Priscila Saltos',
+      fecha_original: '2026-06-01',
+      hora_original: '15:00',
+      nueva_fecha: '2026-06-01',
+      nueva_hora: '17:00',
+      duracion_min: 30,
+    }]
+
+    setAdapterResponse({ tool: 'reagendar_bulk', args: { items } })
+    const activeCitas = [{ id: 'cita-sameday', estado: 'confirmada', fecha: '2026-06-01', hora: '15:00:00', duracion_min: 30 }]
+
+    mockFrom.mockImplementation((table) => {
+      if (table === 'citas') return makeBuilder(table, activeCitas)
+      if (table === 'pending_kelly_actions') return makeBuilder(table, [{ id: 'sameday-id' }])
+      return makeBuilder(table, [])
+    })
+
+    const { POST } = await loadRoute()
+    await POST(makeRequest({ message: { text: 'movela a las 17', chat: { id: 999 } } }))
+
+    const text = JSON.parse(getCapturedFetches().filter((f) => f.url.includes('sendMessage'))[0].opts.body).text
+    // Origin day shown once; destino is hora-only (no second "1 jun").
+    expect(text).toMatch(/Lun 1 jun 15:00 → 17:00/)
+  })
 })
 
 // ─── C-1c: Summary truncation with (+N más) ───────────────────────────────────

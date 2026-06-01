@@ -214,11 +214,13 @@ export function makeBuilder(table, rows, { updateData } = {}) {
       assertColumn(table, col)
       return builder
     }),
+    neq: vi.fn().mockReturnThis(),
     order: vi.fn().mockReturnThis(),
     limit: vi.fn().mockReturnThis(),
     ilike: vi.fn().mockReturnThis(),
     delete: vi.fn().mockReturnThis(),
     single: vi.fn().mockResolvedValue({ data: rows?.[0] ?? null, error: null }),
+    maybeSingle: vi.fn().mockResolvedValue({ data: rows?.[0] ?? null, error: null }),
     insert: vi.fn((payload) => {
       ;(_inserted[table] ||= []).push(payload)
       return builder
@@ -233,6 +235,10 @@ export function makeBuilder(table, rows, { updateData } = {}) {
       const updateBuilder = {
         eq: vi.fn((col, val) => {
           updateFilters[col] = val
+          return updateBuilder
+        }),
+        neq: vi.fn((col, val) => {
+          updateFilters[`neq:${col}`] = val
           return updateBuilder
         }),
         select: vi.fn(() => updateBuilder),

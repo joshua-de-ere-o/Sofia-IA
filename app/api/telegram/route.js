@@ -249,7 +249,9 @@ function guayaquilParts() {
  * @returns {string} e.g. 'Mar 2 jun'
  */
 function formatDiaCorto(fecha) {
+  if (!fecha || typeof fecha !== 'string') return ''
   const [y, m, d] = fecha.split('-').map(Number)
+  if (!y || !m || !d) return fecha
   // Local constructor: no timezone shift — same weekday regardless of TZ offset
   const dt = new Date(y, m - 1, d)
   const DIAS = ['Dom', 'Lun', 'Mar', 'Mié', 'Jue', 'Vie', 'Sáb']
@@ -892,11 +894,21 @@ async function toolReagendarBulkPreview({ items }) {
     `${droppedNote}📋 Reagendamiento masivo — ${activeItems.length} cita${activeItems.length !== 1 ? 's' : ''}:`,
     '',
   ]
-  const itemLines = activeItems.map((item, idx) =>
-    `${idx + 1}. Cita ${item.cita_id} — ${item.fecha_original} ${item.hora_original} → ${item.nueva_fecha} ${item.nueva_hora}` +
-    (item.paciente_nombre ? ` (${item.paciente_nombre})` : '')
-  )
-  const footer = '\n¿Confirmás el reagendamiento de todas las citas?'
+  const itemLines = activeItems.map((item, idx) => {
+    const horaOrig = (item.hora_original || '').slice(0, 5)
+    const horaNueva = (item.nueva_hora || '').slice(0, 5)
+    // Show the destination day only when it differs from the original day,
+    // so a same-day move reads "Lun 1 jun 15:00 → 17:00" (hora-only change).
+    const origen = `${formatDiaCorto(item.fecha_original)} ${horaOrig}`
+    const destino = item.nueva_fecha !== item.fecha_original
+      ? `${formatDiaCorto(item.nueva_fecha)} ${horaNueva}`
+      : horaNueva
+    const nombre = item.paciente_nombre || 'Cita sin nombre'
+    return `${idx + 1}. ${nombre}\n   ${origen} → ${destino}`
+  })
+  const footer = activeItems.length === 1
+    ? '\n\n¿Confirmás el reagendamiento?'
+    : '\n\n¿Confirmás el reagendamiento de todas las citas?'
 
   const MAX_CHARS = 4096
   const header = headerLines.join('\n')
@@ -1461,72 +1473,165 @@ async function resolveKellyPending(pendingId, confirmar) {
     return { kind: 'result', status: 'failed', message: '⌛ La acción expiró.' };
   }
 
-  // ── Optimistic lock (CAS): flip ejecutada=true BEFORE any side-effect.
-  // This closes the concurrent race: two taps both pass the early-exit checks
-  // above, but only one wins the UPDATE WHERE ejecutada=false.
-  // The winning tap gets count:1 and proceeds; the loser gets count:0 and stops.
-  const casAction = confirmar ? 'confirm' : 'cancel';
-  const { count: casCount, error: casError } = await supabase
-    .from('pending_kelly_actions')
-    .update({ ejecutada: true, ejecutada_at: new Date().toISOString() })
-    .eq('id', pendingId)
-    .eq('ejecutada', false)
-    .select();
-
-  if (casError) {
-    console.error(`[Telegram/kelly] CAS error (${casAction}):`, casError?.message || casError);
-    return { kind: 'result', status: 'failed', message: '⚠️ Falló al aplicar.' };
-  }
-  // count===0: another tap already won the lock (or already applied from JS guard above)
-  if (!casCount || casCount === 0) {
-    return { kind: 'result', status: 'already', message: 'ℹ️ Ya fue aplicada.' };
-  }
-
-  // We won the lock. For cancel of a reagendar_bulk action: clear context so the
-  // stale search does not linger and bias the next turn (Fix 1 — clear on cancel).
+  // ── Cancel path: no side-effect against citas; just clear context if needed.
+  // Keep CAS-first here so a concurrent cancel tap still deduplicates cleanly.
   if (!confirmar) {
+    const { count: cancelCasCount, error: cancelCasError } = await supabase
+      .from('pending_kelly_actions')
+      .update({ ejecutada: true, ejecutada_at: new Date().toISOString() })
+      .eq('id', pendingId)
+      .eq('ejecutada', false)
+      .select();
+
+    if (cancelCasError) {
+      console.error('[Telegram/kelly] CAS error (cancel):', cancelCasError?.message || cancelCasError);
+      return { kind: 'result', status: 'failed', message: '⚠️ Falló al cancelar.' };
+    }
+    if (!cancelCasCount || cancelCasCount === 0) {
+      return { kind: 'result', status: 'already', message: 'ℹ️ Ya fue aplicada.' };
+    }
     if (pending.action_type === 'reagendar_bulk') {
       await clearKellyContext();
     }
     return { kind: 'result', status: 'cancelled', message: '↩️ Cancelado.' };
   }
 
-  // We won the lock for confirm: execute the side-effect exactly once.
+  // ── Confirm path ─────────────────────────────────────────────────────────────
+  //
+  // Strategy depends on whether the action uses UPDATE (idempotent) or INSERT
+  // (NOT idempotent):
+  //
+  //   UPDATE actions (reagendar_bulk, reagendar, cancelar):
+  //     Work-first + rows-verified: execute the side-effect FIRST, verify that at
+  //     least one row was actually changed (count > 0), THEN flip ejecutada.
+  //     A duplicate Telegram delivery running the same UPDATE again is harmless
+  //     (idempotent — same data written). The CAS guard after the work prevents
+  //     double-reporting as ✅.
+  //
+  //   INSERT actions (bloqueo, evento_personal):
+  //     CAS-first: flip ejecutada BEFORE the INSERT so a duplicate delivery is
+  //     rejected by the CAS without inserting a second row. INSERTs are NOT
+  //     idempotent — running them twice creates duplicate rows in citas/tareas.
+
+  // ── INSERT actions: CAS-first ─────────────────────────────────────────────────
+  if (pending.action_type === 'bloqueo' || pending.action_type === 'evento_personal') {
+    const { count: insertCasCount, error: insertCasError } = await supabase
+      .from('pending_kelly_actions')
+      .update({ ejecutada: true, ejecutada_at: new Date().toISOString() })
+      .eq('id', pendingId)
+      .eq('ejecutada', false)
+      .select();
+
+    if (insertCasError) {
+      console.error('[Telegram/kelly] CAS error (insert action):', insertCasError?.message || insertCasError);
+      return { kind: 'result', status: 'failed', message: '⚠️ Falló al aplicar.' };
+    }
+    if (!insertCasCount || insertCasCount === 0) {
+      return { kind: 'result', status: 'already', message: 'ℹ️ Ya fue aplicada.' };
+    }
+
+    // Won the CAS — execute the INSERT side-effect exactly once.
+    try {
+      if (pending.action_type === 'bloqueo') {
+        const { fecha, hora, duracion_min, motivo } = pending.args;
+        const { error: e } = await supabase
+          .from('citas')
+          .insert(buildBloqueoRow({ fecha, hora, duracion_min, motivo }));
+        if (e) throw e;
+      } else {
+        // evento_personal
+        const { fecha, hora, duracion_min, motivo, recordar_min_antes } = pending.args;
+        const { error: eBloqueo } = await supabase
+          .from('citas')
+          .insert(buildBloqueoRow({ fecha, hora, duracion_min, motivo }));
+        if (eBloqueo) throw eBloqueo;
+        if (recordar_min_antes > 0) {
+          const recordatorioIso = computeRecordatorioIso(fecha, hora, recordar_min_antes);
+          const { error: eTarea } = await supabase
+            .from('tareas')
+            .insert({ descripcion: `${motivo} (${hora})`, fecha_hora: recordatorioIso });
+          if (eTarea) throw eTarea;
+        }
+      }
+      return { kind: 'result', status: 'applied', message: '✅ Aplicado.' };
+    } catch (err) {
+      console.error('[Telegram/kelly] Error ejecutando acción (insert):', err?.message || err);
+      // CAS lock already flipped. The insert failed but won't be retried.
+      return { kind: 'result', status: 'failed', message: '⚠️ Falló al aplicar.' };
+    }
+  }
+
+  // ── UPDATE actions: work-first + rows-verified ────────────────────────────────
+  //
+  // Execute the side-effect FIRST, verify rows actually changed (count > 0),
+  // then flip ejecutada only after the work succeeded.
+  // A 0-row UPDATE means the cita was already moved/deleted — report as failure.
+
   try {
     if (pending.action_type === 'reagendar_bulk') {
       // ── Best-effort bulk apply: iterate items, collect per-item results ──────
-      // CAS lock already won above. Each cita.update() is independent — no
-      // Postgres transaction wraps the loop (Supabase REST calls). Continue on
+      // Each cita UPDATE is independent (no Postgres transaction). Continue on
       // individual failure (REQ-S3-04 best-effort + per-item report).
+      // A 0-row UPDATE (count:0) means the cita no longer exists or was already
+      // moved — count as failed, NOT as success.
       const { items = [] } = pending.args;
       const results = [];
       for (const item of items) {
         const { cita_id, nueva_fecha, nueva_hora } = item;
-        const { error: e } = await supabase
+        const { data: updateData, error: e, count: updateCount } = await supabase
           .from('citas')
           .update({ fecha: nueva_fecha, hora: nueva_hora })
-          .eq('id', cita_id);
-        results.push({ cita_id, ok: !e, error: e?.message });
+          .eq('id', cita_id)
+          .select('id');
+        const rowsAffected = e ? 0 : (updateCount ?? (updateData ? updateData.length : 0));
+        results.push({ cita_id, ok: !e && rowsAffected > 0, error: e?.message });
       }
+
       const applied = results.filter((r) => r.ok).length;
       const failed  = results.filter((r) => !r.ok).length;
       const failList = results
         .filter((r) => !r.ok)
-        .map((r) => `• ${r.cita_id}: ${r.error || 'error desconocido'}`)
+        .map((r) => `• ${r.cita_id}: ${r.error || 'no se encontró o ya fue movida'}`)
         .join('\n');
+
       // Fix 2: clear context on ALL outcomes of a bulk confirm (success, partial,
       // or total failure). The search is consumed the moment the user acted on it;
       // leaving it would bias the next unrelated turn.
       await clearKellyContext();
+
       if (applied === 0) {
+        // All items failed — do NOT flip ejecutada (no work was done successfully).
+        // A future retry could potentially recover if the citas become available again,
+        // but more importantly: setting ejecutada=true here would lock the user out
+        // of any recovery path while the CRM is unchanged.
         return {
           kind: 'result',
           status: 'failed',
           message: `⚠️ No se pudo reagendar ninguna cita (${failed} fallaron):\n${failList}`,
         };
       }
+
+      // At least one item succeeded — flip ejecutada to prevent double-reporting.
+      // Use the CAS guard (WHERE ejecutada=false) so a concurrent tap that
+      // somehow already flipped it does not cause a double success toast.
+      const { count: bulkCasCount } = await supabase
+        .from('pending_kelly_actions')
+        .update({ ejecutada: true, ejecutada_at: new Date().toISOString() })
+        .eq('id', pendingId)
+        .eq('ejecutada', false)
+        .select();
+
+      if (!bulkCasCount || bulkCasCount === 0) {
+        // Another tap already won the CAS (work was idempotent). Report as already.
+        return { kind: 'result', status: 'already', message: 'ℹ️ Ya fue aplicada.' };
+      }
+
       if (failed === 0) {
-        return { kind: 'result', status: 'applied', message: `✅ ${applied} cita${applied !== 1 ? 's' : ''} reagendada${applied !== 1 ? 's' : ''}.` };
+        return {
+          kind: 'result',
+          status: 'applied',
+          message: `✅ ${applied} cita${applied !== 1 ? 's' : ''} reagendada${applied !== 1 ? 's' : ''}.`,
+        };
       }
       return {
         kind: 'result',
@@ -1535,50 +1640,72 @@ async function resolveKellyPending(pendingId, confirmar) {
       };
     } else if (pending.action_type === 'reagendar') {
       const { cita_id, nueva_fecha, nueva_hora } = pending.args;
-      const { error: e } = await supabase
+      const { data: updateData, error: e, count: updateCount } = await supabase
         .from('citas')
         .update({ fecha: nueva_fecha, hora: nueva_hora })
-        .eq('id', cita_id);
+        .eq('id', cita_id)
+        .select('id');
       if (e) throw e;
+      const rowsAffected = updateCount ?? (updateData ? updateData.length : 0);
+      if (rowsAffected === 0) {
+        return { kind: 'result', status: 'failed', message: '⚠️ No se encontró la cita para reagendar.' };
+      }
     } else if (pending.action_type === 'cancelar') {
       const { cita_id } = pending.args;
-      const { error: e } = await supabase
+      // Only count rows that were NOT already cancelled: Postgres counts a matched
+      // row as affected even when the value doesn't change, so without .neq a
+      // re-cancel of an already-cancelled cita would report a false "✅ aplicado".
+      const { data: updateData, error: e, count: updateCount } = await supabase
         .from('citas')
         .update({ estado: 'cancelada' })
-        .eq('id', cita_id);
+        .eq('id', cita_id)
+        .neq('estado', 'cancelada')
+        .select('id');
       if (e) throw e;
-    } else if (pending.action_type === 'bloqueo') {
-      const { fecha, hora, duracion_min, motivo } = pending.args;
-      const { error: e } = await supabase
-        .from('citas')
-        .insert(buildBloqueoRow({ fecha, hora, duracion_min, motivo }));
-      if (e) throw e;
-    } else if (pending.action_type === 'evento_personal') {
-      const { fecha, hora, duracion_min, motivo, recordar_min_antes } = pending.args;
-      // 1. Block the schedule slot
-      const { error: eBloqueo } = await supabase
-        .from('citas')
-        .insert(buildBloqueoRow({ fecha, hora, duracion_min, motivo }));
-      if (eBloqueo) throw eBloqueo;
-      // 2. Schedule reminder (0 = no reminder)
-      if (recordar_min_antes > 0) {
-        const recordatorioIso = computeRecordatorioIso(fecha, hora, recordar_min_antes);
-        const { error: eTarea } = await supabase
-          .from('tareas')
-          .insert({ descripcion: `${motivo} (${hora})`, fecha_hora: recordatorioIso });
-        if (eTarea) throw eTarea;
+      const rowsAffected = updateCount ?? (updateData ? updateData.length : 0);
+      if (rowsAffected === 0) {
+        // Either the cita doesn't exist, or it was already cancelled. Distinguish
+        // so the operator gets an honest message instead of a false success.
+        const { data: existing } = await supabase
+          .from('citas')
+          .select('id, estado')
+          .eq('id', cita_id)
+          .maybeSingle();
+        if (existing && existing.estado === 'cancelada') {
+          return { kind: 'result', status: 'already', message: 'ℹ️ La cita ya estaba cancelada.' };
+        }
+        return { kind: 'result', status: 'failed', message: '⚠️ No se encontró la cita para cancelar.' };
       }
     } else {
       return { kind: 'result', status: 'failed', message: '⚠️ Tipo desconocido.' };
     }
-
-    return { kind: 'result', status: 'applied', message: '✅ Aplicado.' };
   } catch (err) {
-    console.error('[Telegram/kelly] Error ejecutando acción:', err?.message || err);
-    // Best-effort: the CAS lock was already flipped. The action failed but won't
-    // be retried (ejecutada=true). Log is sufficient for ops investigation.
+    console.error('[Telegram/kelly] Error ejecutando acción (update):', err?.message || err);
     return { kind: 'result', status: 'failed', message: '⚠️ Falló al aplicar.' };
   }
+
+  // Work succeeded — now flip ejecutada with the CAS guard.
+  // A concurrent tap that already won this race returns "ya fue aplicada",
+  // which is correct: the work is idempotent so the user sees the right status.
+  const { count: workCasCount, error: workCasError } = await supabase
+    .from('pending_kelly_actions')
+    .update({ ejecutada: true, ejecutada_at: new Date().toISOString() })
+    .eq('id', pendingId)
+    .eq('ejecutada', false)
+    .select();
+
+  if (workCasError) {
+    console.error('[Telegram/kelly] CAS error (post-work flip):', workCasError?.message || workCasError);
+    // Work was done but lock failed to record — treat as applied anyway (work succeeded).
+    return { kind: 'result', status: 'applied', message: '✅ Aplicado.' };
+  }
+  if (!workCasCount || workCasCount === 0) {
+    // Another concurrent tap already flipped ejecutada. Work was idempotent so
+    // no harm done — report as "already applied" to avoid double ✅.
+    return { kind: 'result', status: 'already', message: 'ℹ️ Ya fue aplicada.' };
+  }
+
+  return { kind: 'result', status: 'applied', message: '✅ Aplicado.' };
 }
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────

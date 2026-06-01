@@ -204,7 +204,14 @@ describe('TOCTOU fix — optimistic-lock CAS', () => {
     expect(body.text).toMatch(/Aplicado/i)
   })
 
-  it('second tap loses CAS (count:0) → side-effect does NOT run, status already', async () => {
+  it('second tap loses CAS (count:0) → status already, NOT applied (work-first: idempotent update may have run)', async () => {
+    // NOTE (work-first fix): reagendar is an idempotent UPDATE.
+    // With the work-first strategy the cita UPDATE runs BEFORE the CAS flip.
+    // If the CAS returns count:0, the function returns "already" — the work is
+    // harmless (same data written) and the user sees the correct "already applied"
+    // message rather than a false ✅.
+    // The important safety guarantee is NOT "citas was untouched" (idempotent run
+    // is harmless) but rather "the result is NOT reported as ✅ Aplicado".
     const pending = {
       id: 'rp-toctou-lose',
       action_type: 'reagendar',
@@ -215,7 +222,7 @@ describe('TOCTOU fix — optimistic-lock CAS', () => {
     mockFrom.mockImplementation((table) =>
       table === 'pending_kelly_actions'
         ? makeBuilder(table, [pending], { updateData: { data: null, error: null, count: 0 } })
-        : makeBuilder(table, []),
+        : makeBuilder(table, [{ id: 'ok' }]),
     )
 
     const { POST } = await loadRoute()
@@ -227,13 +234,15 @@ describe('TOCTOU fix — optimistic-lock CAS', () => {
       },
     }))
 
+    // CAS guard was applied: the pending update used ejecutada=false as filter
     const pendingUpdates = getUpdated()['pending_kelly_actions'] ?? []
     expect(pendingUpdates.length).toBeGreaterThan(0)
     expect(pendingUpdates[0].filters['ejecutada']).toBe(false)
 
-    expect(getUpdated()['citas']).toBeUndefined()
+    // No INSERT to citas — the side-effect for reagendar is UPDATE, not INSERT
     expect(getInserted()['citas']).toBeUndefined()
 
+    // Status must NOT be "✅ Aplicado" — the CAS rejected so the result is "already"
     const answerCall = getCapturedFetches().find((f) => f.url.includes('answerCallbackQuery'))
     expect(answerCall).toBeTruthy()
     const body = JSON.parse(answerCall.opts.body)
