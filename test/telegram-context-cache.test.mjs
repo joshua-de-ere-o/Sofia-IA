@@ -14,7 +14,7 @@
  *   - Context injection into userText (not systemPrompt) when context is fresh
  *   - No injection when context is null/stale
  *   - maxTokens raised to 900 on injected turn, 500 otherwise
- *   - clearKellyContext called after successful reagendar_bulk confirm; NOT on cancel
+ *   - clearKellyContext called after successful reagendar_bulk confirm AND on cancel
  *   - Two-turn integration test: search → "movelas" → reagendar_bulk uses cached ids
  */
 
@@ -26,6 +26,7 @@ import {
   makeBuilder,
   makeRequest,
   loadRoute,
+  getInserted,
   getCapturedFetches,
   setAdapterResponse,
   setAdapterResponses,
@@ -735,9 +736,6 @@ describe('PR2b: two-turn integration (search → movelas → reagendar_bulk)', (
         }),
       })
 
-    // pending_kelly_actions for the bulk preview insert
-    const insertedPending = []
-
     mockFrom.mockImplementation((table) => {
       if (table === 'citas') return makeBuilder(table, MOCK_CITAS_ROWS)
       if (table === 'telegram_kelly_context') {
@@ -766,13 +764,11 @@ describe('PR2b: two-turn integration (search → movelas → reagendar_bulk)', (
         }
       }
       if (table === 'pending_kelly_actions') {
-        return {
-          ...makeBuilder(table, []),
-          insert: vi.fn((payload) => {
-            insertedPending.push(payload)
-            return Promise.resolve({ data: null, error: null })
-          }),
-        }
+        // Chainable builder so insert({...}).select('id').single() resolves correctly.
+        // makeBuilder returns a builder where insert() returns itself, then select()
+        // returns itself, then single() resolves to { data: rows[0], error: null }.
+        // The side-effect capture uses the builder's insert spy tracked via getInserted().
+        return makeBuilder(table, [{ id: 'pending-2turn' }])
       }
       return makeBuilder(table, [])
     })
@@ -805,10 +801,21 @@ describe('PR2b: two-turn integration (search → movelas → reagendar_bulk)', (
     expect(turn2UserText).toContain('uuid-b')
     expect(turn2UserText).toContain('reagendar_bulk')
 
-    // Assert the reagendar_bulk preview was triggered (pending insert)
-    // The LLM response had reagendar_bulk → toolReagendarBulkPreview should have run
+    // Assert the reagendar_bulk preview actually completed:
+    // - a pending row was inserted (proves toolReagendarBulkPreview ran past the INSERT)
+    const pendingInserts = getInserted()['pending_kelly_actions']
+    expect(pendingInserts).toBeDefined()
+    expect(pendingInserts.length).toBeGreaterThanOrEqual(1)
+    expect(pendingInserts[0]).toMatchObject({ action_type: 'reagendar_bulk' })
+
+    // - a preview sendMessage was sent (proves the preview message was dispatched)
     const sends = getCapturedFetches().filter((f) => f.url.includes('sendMessage'))
-    expect(sends.length).toBeGreaterThanOrEqual(2) // turn1 list + turn2 preview/reply
+    expect(sends.length).toBeGreaterThanOrEqual(2) // turn1 list + turn2 preview
+    // The turn-2 send should contain the preview text
+    const turn2Send = sends.find((s) => {
+      try { return JSON.parse(s.opts.body).text?.includes('Reagendamiento masivo') } catch { return false }
+    })
+    expect(turn2Send).toBeDefined()
   })
 })
 
@@ -916,11 +923,11 @@ describe('PR2b fix: topic-change clear when non-bulk tool picked with injected c
         }
       }
       if (table === 'pending_kelly_actions') {
-        return {
-          ...makeBuilder(table, []),
-          insert: vi.fn().mockResolvedValue({ data: [{ id: 'p-new' }], error: null }),
-          select: vi.fn().mockReturnThis(),
-        }
+        // Chainable builder: insert({...}).select('id').single() must resolve to a
+        // real pending row so toolReagendarBulkPreview completes successfully and
+        // handleKellyMessage reaches the topic-change guard. A plain Promise.resolve()
+        // would cause .select() to throw, skip the guard, and produce a false-positive.
+        return makeBuilder(table, [{ id: 'pending-topic-test' }])
       }
       if (table === 'citas') return makeBuilder(table, MOCK_CITAS_ROWS)
       return makeBuilder(table, [])
@@ -946,6 +953,19 @@ describe('PR2b fix: topic-change clear when non-bulk tool picked with injected c
         message: { chat: { id: 999 }, from: { id: 999 }, text: 'movelas a las 3pm' },
       })
     )
+
+    // Verify toolReagendarBulkPreview completed: a pending row was inserted and the
+    // preview message was sent. This confirms the guard was genuinely evaluated
+    // (not bypassed by an early exception in the tool).
+    const pendingInserts = getInserted()['pending_kelly_actions']
+    expect(pendingInserts).toBeDefined()
+    expect(pendingInserts[0]).toMatchObject({ action_type: 'reagendar_bulk' })
+
+    const sends = getCapturedFetches().filter((f) => f.url.includes('sendMessage'))
+    const previewSent = sends.some((s) => {
+      try { return JSON.parse(s.opts.body).text?.includes('Reagendamiento masivo') } catch { return false }
+    })
+    expect(previewSent).toBe(true)
 
     // reagendar_bulk leaves context alive for the confirm step — must NOT clear here
     expect(deleteMock).not.toHaveBeenCalled()
