@@ -41,9 +41,30 @@ export function getCapturedFetches() { return _capturedFetches }
 
 export let mockAdapterResponse = '{"tool":"responder_texto","args":{"texto":"ok"}}'
 
-/** Override the LLM adapter response for the current test. */
+// Multi-response queue. null = use static mockAdapterResponse (backward-compat).
+let _responseQueue = null
+
+/**
+ * Override the LLM adapter response for the current test.
+ * The same value is returned on every chat() call (static mode).
+ */
 export function setAdapterResponse(json) {
   mockAdapterResponse = typeof json === 'string' ? json : JSON.stringify(json)
+  _responseQueue = null // clear any queue so static mode takes over
+}
+
+/**
+ * Queue multiple sequential LLM responses.
+ * Each adapter.chat() call dequeues the next item.
+ * Throws if the queue is empty (underflow) — fails loudly rather than silently.
+ * setAdapterResponse (single) remains backward-compatible.
+ *
+ * @param {Array<string|object>} responses - Responses in dequeue order.
+ */
+export function setAdapterResponses(responses) {
+  _responseQueue = responses.map((r) =>
+    typeof r === 'string' ? r : JSON.stringify(r)
+  )
 }
 
 // ─── Module-level vi.mock declarations ───────────────────────────────────────
@@ -56,7 +77,20 @@ vi.mock('@supabase/supabase-js', () => ({
 
 vi.mock('@/lib/model-adapter', () => ({
   getModelAdapter: vi.fn(() =>
-    Promise.resolve({ chat: vi.fn(async () => mockAdapterResponse) }),
+    Promise.resolve({
+      chat: vi.fn(async () => {
+        if (_responseQueue !== null) {
+          if (_responseQueue.length === 0) {
+            throw new Error(
+              'setAdapterResponses queue is empty (underflow) — ' +
+              'test issued more chat() calls than queued responses'
+            )
+          }
+          return _responseQueue.shift()
+        }
+        return mockAdapterResponse
+      }),
+    })
   ),
 }))
 
@@ -77,6 +111,7 @@ export function resetTelegramState() {
   _inserted = {}
   _updated = {}
   _capturedFetches = []
+  _responseQueue = null
   _originalFetch = globalThis.fetch
   globalThis.fetch = _mockFetch
   process.env.TELEGRAM_BOT_TOKEN = 'test-bot-token'
@@ -118,6 +153,36 @@ export async function loadRoute() {
   return _routeModule
 }
 
+// ─── Column allow-list (per-table) ───────────────────────────────────────────
+// Opt-in: only tables listed here are validated. Other tables are unrestricted.
+// Catches wrong column names (e.g. phantom `paciente_nombre`) early in tests
+// before they silently no-op against the real DB.
+
+const ALLOWED_COLUMNS = {
+  citas: new Set([
+    'id', 'zona', 'fecha', 'hora', 'estado', 'duracion_min',
+    'patient_name_normalized', 'pacientes', 'paciente_id',
+  ]),
+  telegram_kelly_context: new Set([
+    'chat_id', 'last_search', 'updated_at',
+  ]),
+}
+
+/**
+ * Assert that `col` is in the allow-list for `table`.
+ * Only enforced for tables in ALLOWED_COLUMNS; all others pass through.
+ */
+function assertColumn(table, col) {
+  const allowed = ALLOWED_COLUMNS[table]
+  if (!allowed) return // table not under validation
+  if (!allowed.has(col)) {
+    throw new Error(
+      `[mock] unknown column "${col}" queried on table "${table}". ` +
+      `Allowed: ${[...allowed].join(', ')}`
+    )
+  }
+}
+
 // ─── makeBuilder ─────────────────────────────────────────────────────────────
 /**
  * Build a chainable Supabase mock for `table`.
@@ -135,13 +200,20 @@ export function makeBuilder(table, rows, { updateData } = {}) {
   const builder = {
     select: vi.fn().mockReturnThis(),
     eq: vi.fn((col, val) => {
+      assertColumn(table, col)
       eqFilters[col] = val
       return builder
     }),
     in: vi.fn().mockReturnThis(),
     not: vi.fn().mockReturnThis(),
-    gte: vi.fn().mockReturnThis(),
-    lte: vi.fn().mockReturnThis(),
+    gte: vi.fn((col, val) => {
+      assertColumn(table, col)
+      return builder
+    }),
+    lte: vi.fn((col, val) => {
+      assertColumn(table, col)
+      return builder
+    }),
     order: vi.fn().mockReturnThis(),
     limit: vi.fn().mockReturnThis(),
     ilike: vi.fn().mockReturnThis(),

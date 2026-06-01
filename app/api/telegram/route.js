@@ -210,8 +210,8 @@ Tools disponibles:
 - cancelar_cita_kelly { "nombre_paciente": str, "fecha"?: "YYYY-MM-DD" }
 - crear_bloqueo_agenda { "fecha": "YYYY-MM-DD", "hora": "HH:MM", "duracion_min": int, "motivo": str }
 - agendar_evento_personal { "motivo": str, "fecha": "YYYY-MM-DD", "hora": "HH:MM", "duracion_min"?: int, "recordar_min_antes"?: int }
-- buscar_citas_bulk { "fecha_desde": "YYYY-MM-DD", "fecha_hasta": "YYYY-MM-DD", "zona"?: "sur|norte|virtual|valle|domicilio|santo_domingo", "estado"?: [str] }
-  // Busca citas activas en un rango de fechas, con zona opcional. Úsala antes de proponer reagendamientos masivos. No crea ni modifica datos.
+- buscar_citas_bulk { "fecha_desde": "YYYY-MM-DD", "fecha_hasta": "YYYY-MM-DD", "zona"?: "sur|norte|virtual|valle|domicilio|santo_domingo", "estado"?: [str], "hora_desde"?: "HH:MM", "hora_hasta"?: "HH:MM" }
+  // Busca citas activas en un rango de fechas, con zona opcional. Úsala antes de proponer reagendamientos masivos. No crea ni modifica datos. hora_desde y hora_hasta (formato HH:MM 24h) son opcionales pero deben usarse siempre juntos — si solo das uno, se devuelve error.
 - reagendar_bulk { "items": [ { "cita_id": str, "paciente_nombre"?: str, "fecha_original": "YYYY-MM-DD", "hora_original": "HH:MM", "nueva_fecha": "YYYY-MM-DD", "nueva_hora": "HH:MM", "duracion_min": int } ] }
   // Reagenda múltiples citas en un solo paso. Máximo ${MAX_BULK_ITEMS} ítems. Incluí "paciente_nombre" (disponible en el resultado de buscar_citas_bulk) para que el resumen muestre el nombre real del paciente. Primero usa buscar_citas_bulk para obtener los IDs, nombres y duraciones. Crea un preview con botón de confirmación — no aplica nada de inmediato.
 - crear_tarea { "descripcion": str, "fecha_hora_iso": "YYYY-MM-DDTHH:MM:SS-05:00" }
@@ -483,17 +483,33 @@ const BULK_EXCLUDED_STATES = ['cancelada', 'no_show', 'rechazada']
  *
  * REQ-S2-01, REQ-S2-02, REQ-S2-03
  *
- * @param {{ zona?: string, fecha_desde: string, fecha_hasta: string, estado?: string[] }} args
+ * @param {{ zona?: string, fecha_desde: string, fecha_hasta: string, estado?: string[], hora_desde?: string, hora_hasta?: string }} args
  *
  * WARNING: passing an explicit `estado[]` override REPLACES the default
  * BULK_EXCLUDED_STATES exclusion entirely. The rebuilt query uses `.in('estado', estado)`
  * instead of `.not(...)`, so a caller CAN include terminal states (cancelada, no_show,
  * rechazada) if they pass them explicitly. Omit `estado` to get the safe default.
+ *
+ * hora_desde / hora_hasta (HH:MM, 24h zero-padded) filter citas by time window.
+ * Both-or-neither: if exactly one is provided, the tool returns a validation error
+ * without querying the DB (REQ-1.1). Comparison is lexicographic on HH:MM strings
+ * which is correct for zero-padded 24h time (REQ-1.2).
  */
-async function toolBuscarCitasBulk({ zona, fecha_desde, fecha_hasta, estado }) {
+async function toolBuscarCitasBulk({ zona, fecha_desde, fecha_hasta, estado, hora_desde, hora_hasta }) {
   if (!fecha_desde || !fecha_hasta) {
     return sendToKely('⚠️ Necesito fecha_desde y fecha_hasta (YYYY-MM-DD) para buscar citas.')
   }
+
+  // REQ-1.1: both-or-neither — if exactly one hora param is provided, reject immediately
+  const horaDesdePresent = hora_desde != null && hora_desde !== ''
+  const horaHastaPresent = hora_hasta != null && hora_hasta !== ''
+  if (horaDesdePresent !== horaHastaPresent) {
+    return sendToKely(
+      '⚠️ hora_desde y hora_hasta deben usarse siempre juntos (ambos o ninguno). ' +
+      `Falta: ${!horaDesdePresent ? 'hora_desde' : 'hora_hasta'}`
+    )
+  }
+  const horaFilter = horaDesdePresent && horaHastaPresent
 
   // Build query — RLS-safe via service role; no patient PII in logs
   // Use a LEFT embed for pacientes so citas without a linked patient are not dropped.
@@ -513,6 +529,11 @@ async function toolBuscarCitasBulk({ zona, fecha_desde, fecha_hasta, estado }) {
     query = query.eq('zona', zona)
   }
 
+  // REQ-1.2: apply hora filter (inclusive bounds) when both params present
+  if (horaFilter) {
+    query = query.gte('hora', hora_desde).lte('hora', hora_hasta)
+  }
+
   // Caller may override the excluded states (e.g. include 'cancelada' for review)
   if (Array.isArray(estado) && estado.length > 0) {
     query = supabase
@@ -526,6 +547,11 @@ async function toolBuscarCitasBulk({ zona, fecha_desde, fecha_hasta, estado }) {
 
     if (zona) {
       query = query.eq('zona', zona)
+    }
+
+    // REQ-1.2 / REQ-1.3: hora filter must also be applied to the explicit-estado branch
+    if (horaFilter) {
+      query = query.gte('hora', hora_desde).lte('hora', hora_hasta)
     }
   }
 
