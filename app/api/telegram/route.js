@@ -302,11 +302,36 @@ async function handleKellyMessage(text) {
   const ctx = guayaquilParts();
   const primerMensaje = await esPrimerMensajeDelDia(ctx.fecha);
 
-  const userText = `[Hoy es ${ctx.legible}]\n[Primer mensaje del día: ${primerMensaje ? 'sí' : 'no'}]\n\nMensaje de Kely:\n"${text}"`;
+  let userText = `[Hoy es ${ctx.legible}]\n[Primer mensaje del día: ${primerMensaje ? 'sí' : 'no'}]\n\nMensaje de Kely:\n"${text}"`;
+
+  // PR2b (D3): inject last-search context into userText (NOT systemPrompt) so the
+  // LLM can emit reagendar_bulk with real cita_ids without re-searching.
+  // Injected only when context is fresh (<30 min); no-op otherwise.
+  const kellyCtx = await readKellyContext();
+  if (kellyCtx) {
+    const { criteria, citas } = kellyCtx;
+    const zonaStr  = criteria.zona       ? `zona ${criteria.zona}, ` : '';
+    const fechaStr = criteria.fecha_desde === criteria.fecha_hasta
+      ? criteria.fecha_desde
+      : `${criteria.fecha_desde}–${criteria.fecha_hasta}`;
+    const horaStr  = (criteria.hora_desde && criteria.hora_hasta)
+      ? ` ${criteria.hora_desde}-${criteria.hora_hasta}`
+      : '';
+    const citaLines = citas
+      .map((c) => `  - ${c.cita_id} ${c.paciente_nombre} ${c.fecha} ${c.hora} ${c.duracion_min}min`)
+      .join('\n');
+    userText +=
+      `\n[Contexto: última búsqueda (${zonaStr}${fechaStr}${horaStr}) — ${citas.length} citas:\n` +
+      citaLines +
+      `\n]\nSi Kely pide mover/reagendar "esas"/"todas", emite reagendar_bulk con estos cita_id y duracion_min.`;
+  }
+  // PR2b (D4): raise maxTokens conditionally — a reagendar_bulk JSON with up to 12
+  // items can exceed 500 output tokens; keep 500 for normal turns to control cost.
+  const maxTokens = kellyCtx ? 900 : 500;
 
   let raw;
   try {
-    raw = await adapter.chat({ systemPrompt: KELLY_SYSTEM_PROMPT, userText, maxTokens: 500 });
+    raw = await adapter.chat({ systemPrompt: KELLY_SYSTEM_PROMPT, userText, maxTokens });
   } catch (err) {
     console.error('[Telegram/kelly] Error LLM:', err?.message || err);
     await sendToKely('⚠️ Tuve un problema procesando tu mensaje. Intenta de nuevo en un rato.');
@@ -328,8 +353,8 @@ async function handleKellyMessage(text) {
       case 'consultar_agenda':        await toolConsultarAgenda(args); break;
       case 'consultar_finanzas':      await toolConsultarFinanzas(args); break;
       case 'buscar_citas_bulk': {
-        // PR2a: capture result and persist context (write side only).
-        // Injection into userText (read side) is PR2b.
+        // Capture result and persist context (write side). Read/inject side happens
+        // above (readKellyContext before adapter.chat) so it applies on the NEXT turn.
         const bulkResult = await toolBuscarCitasBulk(args);
         if (bulkResult) await writeKellyContext(bulkResult.criteria, bulkResult.citas);
         break;
@@ -1412,6 +1437,9 @@ async function resolveKellyPending(pendingId, confirmar) {
           message: `⚠️ No se pudo reagendar ninguna cita (${failed} fallaron):\n${failList}`,
         };
       }
+      // PR2b (D5): at least one cita was successfully moved — clear the stale search
+      // context so the next conversation starts clean.
+      await clearKellyContext();
       if (failed === 0) {
         return { kind: 'result', status: 'applied', message: `✅ ${applied} cita${applied !== 1 ? 's' : ''} reagendada${applied !== 1 ? 's' : ''}.` };
       }

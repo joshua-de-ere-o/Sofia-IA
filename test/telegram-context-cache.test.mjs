@@ -1,14 +1,21 @@
 /**
  * test/telegram-context-cache.test.mjs
  *
- * PR2a: context cache WRITE side tests.
+ * PR2a + PR2b: context cache tests.
  *
- * Covers:
+ * PR2a covers:
  *   - writeKellyContext: upserts with correct chat_id + JSONB shape; swallows error when table absent
  *   - readKellyContext: returns null when row missing; null when stale (>30 min); object when fresh
  *   - clearKellyContext: issues delete by chat_id; swallows error
  *   - toolBuscarCitasBulk: returns { citas, criteria } with correct mapped shape AND still sends text
  *   - dispatcher: calls writeKellyContext after a buscar_citas_bulk search
+ *
+ * PR2b covers:
+ *   - Context injection into userText (not systemPrompt) when context is fresh
+ *   - No injection when context is null/stale
+ *   - maxTokens raised to 900 on injected turn, 500 otherwise
+ *   - clearKellyContext called after successful reagendar_bulk confirm; NOT on cancel
+ *   - Two-turn integration test: search → "movelas" → reagendar_bulk uses cached ids
  */
 
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
@@ -21,6 +28,7 @@ import {
   loadRoute,
   getCapturedFetches,
   setAdapterResponse,
+  setAdapterResponses,
 } from './helpers/telegram-mock-builder.mjs'
 
 // ─── Shared test data ─────────────────────────────────────────────────────────
@@ -388,5 +396,365 @@ describe('dispatcher write-side wiring', () => {
     )
 
     expect(upsertMock).not.toHaveBeenCalled()
+  })
+})
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// PR2b — READ/INJECT side + maxTokens + clear-on-confirm + 2-turn integration
+// ═══════════════════════════════════════════════════════════════════════════════
+
+// ─── Shared helpers for PR2b ──────────────────────────────────────────────────
+
+const FRESH_CONTEXT = {
+  criteria: { zona: 'norte', fecha_desde: '2026-06-10', fecha_hasta: '2026-06-10' },
+  citas: [
+    { cita_id: 'uuid-a', paciente_nombre: 'Ana Lopez', fecha: '2026-06-10', hora: '08:00', duracion_min: 30 },
+    { cita_id: 'uuid-b', paciente_nombre: 'Carlos Ruiz', fecha: '2026-06-10', hora: '09:00', duracion_min: 45 },
+  ],
+}
+
+function makeFreshContextRow(overrideMs = 5 * 60 * 1000) {
+  return {
+    chat_id: CHAT_ID,
+    last_search: FRESH_CONTEXT,
+    updated_at: new Date(Date.now() - overrideMs).toISOString(),
+  }
+}
+
+function makeStaleContextRow() {
+  return {
+    chat_id: CHAT_ID,
+    last_search: FRESH_CONTEXT,
+    updated_at: new Date(Date.now() - 31 * 60 * 1000).toISOString(),
+  }
+}
+
+// ─── Test: context injection into userText ────────────────────────────────────
+
+describe('PR2b: context injection into userText', () => {
+  beforeEach(() => resetTelegramState())
+  afterEach(() => teardownTelegramMocks())
+
+  it('injects CONTEXT block into userText when context is fresh', async () => {
+    const freshRow = makeFreshContextRow()
+    mockFrom.mockImplementation((table) => {
+      if (table === 'telegram_kelly_context') {
+        return {
+          select: vi.fn().mockReturnThis(),
+          eq: vi.fn().mockReturnThis(),
+          single: vi.fn().mockResolvedValue({ data: freshRow, error: null }),
+          upsert: vi.fn().mockResolvedValue({ data: null, error: null }),
+          delete: vi.fn().mockReturnThis(),
+        }
+      }
+      return makeBuilder(table, [])
+    })
+
+    const { getModelAdapter } = await import('@/lib/model-adapter')
+    let lastUserText = null
+    let lastMaxTokens = null
+    vi.mocked(getModelAdapter).mockResolvedValueOnce({
+      chat: vi.fn(async ({ userText, maxTokens }) => {
+        lastUserText = userText
+        lastMaxTokens = maxTokens
+        return JSON.stringify({ tool: 'responder_texto', args: { texto: 'ok' } })
+      }),
+    })
+
+    const { POST } = await loadRoute()
+    await POST(
+      makeRequest({
+        message: { chat: { id: 999 }, from: { id: 999 }, text: 'movelas a las 3pm' },
+      })
+    )
+
+    expect(lastUserText).not.toBeNull()
+    expect(lastUserText).toContain('[Contexto:')
+    expect(lastUserText).toContain('uuid-a')
+    expect(lastUserText).toContain('uuid-b')
+    expect(lastUserText).toContain('reagendar_bulk')
+    // maxTokens must be 900 on an injected turn
+    expect(lastMaxTokens).toBe(900)
+  })
+
+  it('does NOT inject CONTEXT block when context is null (no prior search)', async () => {
+    mockFrom.mockImplementation((table) => {
+      if (table === 'telegram_kelly_context') {
+        return {
+          select: vi.fn().mockReturnThis(),
+          eq: vi.fn().mockReturnThis(),
+          single: vi.fn().mockResolvedValue({ data: null, error: null }),
+        }
+      }
+      return makeBuilder(table, [])
+    })
+
+    const { getModelAdapter } = await import('@/lib/model-adapter')
+    let lastUserText = null
+    let lastMaxTokens = null
+    vi.mocked(getModelAdapter).mockResolvedValueOnce({
+      chat: vi.fn(async ({ userText, maxTokens }) => {
+        lastUserText = userText
+        lastMaxTokens = maxTokens
+        return JSON.stringify({ tool: 'responder_texto', args: { texto: 'ok' } })
+      }),
+    })
+
+    const { POST } = await loadRoute()
+    await POST(
+      makeRequest({
+        message: { chat: { id: 999 }, from: { id: 999 }, text: 'hola' },
+      })
+    )
+
+    expect(lastUserText).not.toBeNull()
+    expect(lastUserText).not.toContain('[Contexto:')
+    // maxTokens stays 500 for normal turn
+    expect(lastMaxTokens).toBe(500)
+  })
+
+  it('does NOT inject CONTEXT block when context is stale (>30 min)', async () => {
+    const staleRow = makeStaleContextRow()
+    mockFrom.mockImplementation((table) => {
+      if (table === 'telegram_kelly_context') {
+        return {
+          select: vi.fn().mockReturnThis(),
+          eq: vi.fn().mockReturnThis(),
+          single: vi.fn().mockResolvedValue({ data: staleRow, error: null }),
+        }
+      }
+      return makeBuilder(table, [])
+    })
+
+    const { getModelAdapter } = await import('@/lib/model-adapter')
+    let lastUserText = null
+    let lastMaxTokens = null
+    vi.mocked(getModelAdapter).mockResolvedValueOnce({
+      chat: vi.fn(async ({ userText, maxTokens }) => {
+        lastUserText = userText
+        lastMaxTokens = maxTokens
+        return JSON.stringify({ tool: 'responder_texto', args: { texto: 'ok' } })
+      }),
+    })
+
+    const { POST } = await loadRoute()
+    await POST(
+      makeRequest({
+        message: { chat: { id: 999 }, from: { id: 999 }, text: 'movelas' },
+      })
+    )
+
+    expect(lastUserText).not.toContain('[Contexto:')
+    expect(lastMaxTokens).toBe(500)
+  })
+})
+
+// ─── Test: clearKellyContext on confirm ───────────────────────────────────────
+
+describe('PR2b: clearKellyContext on reagendar_bulk confirm', () => {
+  beforeEach(() => resetTelegramState())
+  afterEach(() => teardownTelegramMocks())
+
+  it('calls clearKellyContext (delete) after successful reagendar_bulk confirm', async () => {
+    const deleteMock = vi.fn().mockReturnThis()
+    const eqDeleteMock = vi.fn().mockResolvedValue({ data: null, error: null })
+
+    // pending_kelly_actions row with reagendar_bulk
+    const pendingRow = {
+      id: 'pending-1',
+      action_type: 'reagendar_bulk',
+      args: {
+        items: [
+          { cita_id: 'uuid-a', nueva_fecha: '2026-06-11', nueva_hora: '10:00' },
+        ],
+      },
+      ejecutada: false,
+      expira_at: new Date(Date.now() + 10 * 60 * 1000).toISOString(),
+    }
+
+    mockFrom.mockImplementation((table) => {
+      if (table === 'telegram_kelly_context') {
+        return {
+          delete: deleteMock,
+          eq: eqDeleteMock,
+        }
+      }
+      if (table === 'pending_kelly_actions') {
+        return makeBuilder(table, [pendingRow])
+      }
+      if (table === 'citas') {
+        return makeBuilder(table, [])
+      }
+      return makeBuilder(table, [])
+    })
+
+    const { POST } = await loadRoute()
+    await POST(
+      makeRequest({
+        callback_query: {
+          id: 'cq1',
+          message: { chat: { id: 999 }, message_id: 1 },
+          data: 'kelly_confirm_pending-1',
+        },
+      })
+    )
+
+    expect(deleteMock).toHaveBeenCalled()
+    expect(eqDeleteMock).toHaveBeenCalledWith('chat_id', CHAT_ID)
+  })
+
+  it('does NOT call clearKellyContext on reagendar_bulk CANCEL', async () => {
+    const deleteMock = vi.fn().mockReturnThis()
+    const eqDeleteMock = vi.fn().mockResolvedValue({ data: null, error: null })
+
+    const pendingRow = {
+      id: 'pending-2',
+      action_type: 'reagendar_bulk',
+      args: { items: [] },
+      ejecutada: false,
+      expira_at: new Date(Date.now() + 10 * 60 * 1000).toISOString(),
+    }
+
+    mockFrom.mockImplementation((table) => {
+      if (table === 'telegram_kelly_context') {
+        return {
+          delete: deleteMock,
+          eq: eqDeleteMock,
+        }
+      }
+      if (table === 'pending_kelly_actions') return makeBuilder(table, [pendingRow])
+      return makeBuilder(table, [])
+    })
+
+    const { POST } = await loadRoute()
+    await POST(
+      makeRequest({
+        callback_query: {
+          id: 'cq2',
+          message: { chat: { id: 999 }, message_id: 1 },
+          data: 'kelly_cancel_pending-2',
+        },
+      })
+    )
+
+    expect(deleteMock).not.toHaveBeenCalled()
+  })
+})
+
+// ─── Test: two-turn integration (THE KEY TEST) ────────────────────────────────
+
+describe('PR2b: two-turn integration (search → movelas → reagendar_bulk)', () => {
+  beforeEach(() => resetTelegramState())
+  afterEach(() => teardownTelegramMocks())
+
+  it('turn 1 writes context; turn 2 injects context block and LLM response uses cached cita_ids', async () => {
+    // Turn 1 adapter response: buscar_citas_bulk
+    const turn1Response = {
+      tool: 'buscar_citas_bulk',
+      args: { fecha_desde: '2026-06-10', fecha_hasta: '2026-06-10', zona: 'norte' },
+    }
+    // Turn 2 adapter response: reagendar_bulk using the cached cita_ids
+    const turn2Response = {
+      tool: 'reagendar_bulk',
+      args: {
+        items: [
+          { cita_id: 'uuid-a', nueva_fecha: '2026-06-11', nueva_hora: '15:00', duracion_min: 30 },
+          { cita_id: 'uuid-b', nueva_fecha: '2026-06-11', nueva_hora: '15:30', duracion_min: 45 },
+        ],
+      },
+    }
+
+    // Shared upsert tracker for context write-side
+    let contextWritten = null
+    let turn2UserText = null
+
+    const { getModelAdapter } = await import('@/lib/model-adapter')
+
+    // We'll intercept both chat() calls in sequence
+    vi.mocked(getModelAdapter)
+      .mockResolvedValueOnce({
+        chat: vi.fn(async () => JSON.stringify(turn1Response)),
+      })
+      .mockResolvedValueOnce({
+        chat: vi.fn(async ({ userText }) => {
+          turn2UserText = userText
+          return JSON.stringify(turn2Response)
+        }),
+      })
+
+    // pending_kelly_actions for the bulk preview insert
+    const insertedPending = []
+
+    mockFrom.mockImplementation((table) => {
+      if (table === 'citas') return makeBuilder(table, MOCK_CITAS_ROWS)
+      if (table === 'telegram_kelly_context') {
+        return {
+          select: vi.fn().mockReturnThis(),
+          eq: vi.fn().mockImplementation((col, val) => {
+            // After turn 1 writes, turn 2 read should return the written context
+            return {
+              single: vi.fn().mockResolvedValue({
+                data: contextWritten
+                  ? {
+                      chat_id: CHAT_ID,
+                      last_search: contextWritten,
+                      updated_at: new Date().toISOString(),
+                    }
+                  : null,
+                error: null,
+              }),
+            }
+          }),
+          upsert: vi.fn().mockImplementation((payload) => {
+            contextWritten = payload.last_search
+            return Promise.resolve({ data: null, error: null })
+          }),
+          delete: vi.fn().mockReturnThis(),
+        }
+      }
+      if (table === 'pending_kelly_actions') {
+        return {
+          ...makeBuilder(table, []),
+          insert: vi.fn((payload) => {
+            insertedPending.push(payload)
+            return Promise.resolve({ data: null, error: null })
+          }),
+        }
+      }
+      return makeBuilder(table, [])
+    })
+
+    const { POST } = await loadRoute()
+
+    // Turn 1: buscar citas
+    await POST(
+      makeRequest({
+        message: { chat: { id: 999 }, from: { id: 999 }, text: 'buscar citas norte lunes 07:00-09:00' },
+      })
+    )
+
+    // Assert context was written after turn 1
+    expect(contextWritten).not.toBeNull()
+    expect(contextWritten.citas).toHaveLength(2)
+    expect(contextWritten.citas[0].cita_id).toBe('uuid-a')
+
+    // Turn 2: "movelas todas a las 3pm"
+    await POST(
+      makeRequest({
+        message: { chat: { id: 999 }, from: { id: 999 }, text: 'movelas todas a las 3pm' },
+      })
+    )
+
+    // Assert context block was injected into turn 2 userText
+    expect(turn2UserText).not.toBeNull()
+    expect(turn2UserText).toContain('[Contexto:')
+    expect(turn2UserText).toContain('uuid-a')
+    expect(turn2UserText).toContain('uuid-b')
+    expect(turn2UserText).toContain('reagendar_bulk')
+
+    // Assert the reagendar_bulk preview was triggered (pending insert)
+    // The LLM response had reagendar_bulk → toolReagendarBulkPreview should have run
+    const sends = getCapturedFetches().filter((f) => f.url.includes('sendMessage'))
+    expect(sends.length).toBeGreaterThanOrEqual(2) // turn1 list + turn2 preview/reply
   })
 })
