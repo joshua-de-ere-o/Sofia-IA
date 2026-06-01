@@ -214,8 +214,12 @@ Tools disponibles:
   // Busca citas activas en un rango de fechas, con zona opcional. Úsala antes de proponer reagendamientos masivos. No crea ni modifica datos. hora_desde y hora_hasta (formato HH:MM 24h) son opcionales pero deben usarse siempre juntos — si solo das uno, se devuelve error.
 - reagendar_bulk { "items": [ { "cita_id": str, "paciente_nombre"?: str, "fecha_original": "YYYY-MM-DD", "hora_original": "HH:MM", "nueva_fecha": "YYYY-MM-DD", "nueva_hora": "HH:MM", "duracion_min": int } ] }
   // Reagenda múltiples citas en un solo paso. Máximo ${MAX_BULK_ITEMS} ítems. Incluí "paciente_nombre" (disponible en el resultado de buscar_citas_bulk) para que el resumen muestre el nombre real del paciente. Primero usa buscar_citas_bulk para obtener los IDs, nombres y duraciones. Crea un preview con botón de confirmación — no aplica nada de inmediato.
+- planificar_ventana_trabajo { "zona": str, "fecha": "YYYY-MM-DD", "hora_desde": "HH:MM", "hora_hasta": "HH:MM" }
+  // Úsala cuando Kely declara una ventana de trabajo (ej. "el lunes voy al norte de 7 a 9"). Busca las citas activas en esa ventana, guarda la lista en contexto y le pregunta a Kely a qué hora las mueve. NO crea bloqueo ni preview de reagendamiento.
 - crear_tarea { "descripcion": str, "fecha_hora_iso": "YYYY-MM-DDTHH:MM:SS-05:00" }
 - responder_texto { "texto": str }  // para aclaraciones, preguntas a Kely, saludo del día
+
+Si en el contexto hay una búsqueda previa y Kely dice 'movelas'/'esas', usá esos cita_id directamente con reagendar_bulk; no vuelvas a buscar.
 
 Reglas:
 - Si falta info para una destructiva (ej. duracion_min en bloqueo, hora exacta), usa responder_texto con la pregunta.
@@ -359,6 +363,13 @@ async function handleKellyMessage(text) {
         if (bulkResult) await writeKellyContext(bulkResult.criteria, bulkResult.citas);
         break;
       }
+      case 'planificar_ventana_trabajo': {
+        // Thin orchestrator: identifies citas in the declared work window, persists
+        // context, and asks Kely to state the target. Does NOT initiate a preview.
+        const ventanaResult = await toolPlanificarVentanaTrabajo(args);
+        if (ventanaResult) await writeKellyContext(ventanaResult.criteria, ventanaResult.citas);
+        break;
+      }
       case 'reagendar_bulk':          toolResult = await toolReagendarBulkPreview(args); break;
       case 'reagendar_cita_kelly':    toolResult = await toolReagendarCita(args); break;
       case 'cancelar_cita_kelly':     toolResult = await toolCancelarCita(args); break;
@@ -378,9 +389,11 @@ async function handleKellyMessage(text) {
     // chose an unrelated tool, clear the stale search now so it does not carry
     // over and bias future turns.
     // - buscar_citas_bulk: already overwrites context via writeKellyContext → skip clear.
+    // - planificar_ventana_trabajo: also overwrites context via writeKellyContext → skip clear.
     // - reagendar_bulk: context is kept alive for the upcoming confirm step → skip clear.
     // - everything else: the user changed topic → clear.
-    if (kellyCtx && parsed.tool !== 'buscar_citas_bulk' && parsed.tool !== 'reagendar_bulk') {
+    const CONTEXT_WRITE_TOOLS = new Set(['buscar_citas_bulk', 'planificar_ventana_trabajo', 'reagendar_bulk'])
+    if (kellyCtx && !CONTEXT_WRITE_TOOLS.has(parsed.tool)) {
       await clearKellyContext();
     }
   } catch (err) {
@@ -732,6 +745,41 @@ async function toolBuscarCitasBulk({ zona, fecha_desde, fecha_hasta, estado, hor
   }
 }
 
+// ─── planificar_ventana_trabajo (PR3, D7) ─────────────────────────────────────
+//
+// Thin orchestrator: given a work window (zona + fecha + hora range), runs the
+// same hora-filtered query as toolBuscarCitasBulk, returns the result so the
+// dispatcher can persist it to context, and asks Kely to state the move target.
+// Does NOT auto-move, does NOT insert a pending row.
+//
+// @param {{ zona: string, fecha: string, hora_desde: string, hora_hasta: string }} args
+// @returns {Promise<{ citas: Array, criteria: object } | undefined>}
+
+async function toolPlanificarVentanaTrabajo({ zona, fecha, hora_desde, hora_hasta }) {
+  if (!fecha || !hora_desde || !hora_hasta || !zona) {
+    return sendToKely('⚠️ Necesito zona, fecha, hora_desde y hora_hasta para planificar la ventana.')
+  }
+
+  // Reuse toolBuscarCitasBulk logic: single-day query with hora filter.
+  // fecha maps to both fecha_desde and fecha_hasta (single-day window).
+  const result = await toolBuscarCitasBulk({
+    zona,
+    fecha_desde: fecha,
+    fecha_hasta: fecha,
+    hora_desde,
+    hora_hasta,
+  })
+
+  // toolBuscarCitasBulk already called sendToKely with the list (or a "no citas" message).
+  // Return undefined early if it returned nothing (clarification path already sent).
+  if (!result || !result.citas || result.citas.length === 0) return undefined
+
+  // Ask Kely to state the target time for the move.
+  await sendToKely(`¿A qué hora las muevo?`)
+
+  return result
+}
+
 // ─── Bulk reschedule preview tool ────────────────────────────────────────────
 
 /**
@@ -761,12 +809,31 @@ async function toolReagendarBulkPreview({ items }) {
     )
   }
 
+  // ── Anti-hallucination guard (PR3, D6, REQ-3.2) ─────────────────────────────
+  // Re-validate every cita_id against the live DB before doing anything else.
+  // Prevents the LLM from inventing or stale-referencing ids that would otherwise
+  // reach a real reschedule. Uses BULK_EXCLUDED_STATES to match search-tool semantics.
+  const guardIds = items.map((i) => i.cita_id)
+  const { data: liveRows } = await supabase
+    .from('citas')
+    .select('id,estado')
+    .in('id', guardIds)
+    .not('estado', 'in', `(${BULK_EXCLUDED_STATES.join(',')})`)
+  const liveSet = new Set((liveRows || []).map((c) => c.id))
+  const validItems = items.filter((i) => liveSet.has(i.cita_id))
+  if (validItems.length === 0) {
+    return sendToKely('⚠️ Esas citas ya no están activas o no existen. Volvé a buscarlas.')
+  }
+  const droppedCount = items.length - validItems.length
+  // Use validItems for all downstream logic (overlap check, INSERT, summary).
+  const activeItems = validItems
+
   // ── Validation: overlap check at preview time ────────────────────────────────
   // Fetch all citas on the target dates to build occupied ranges.
   // We also need the ids so we can exclude the batch's own citas (their current
   // slots are being vacated — treating them as occupied would cause a false
   // self-collision when moving a cita to a different time on the same day).
-  const targetDates = [...new Set(items.map((i) => i.nueva_fecha))]
+  const targetDates = [...new Set(activeItems.map((i) => i.nueva_fecha))]
   const { data: existingCitas, error: fetchError } = await supabase
     .from('citas')
     .select('id, fecha, hora, duracion_min, estado')
@@ -774,7 +841,7 @@ async function toolReagendarBulkPreview({ items }) {
   if (fetchError) throw fetchError
 
   // Build the set of cita ids being moved so we can skip their current rows.
-  const batchCitaIds = new Set(items.map((i) => i.cita_id))
+  const batchCitaIds = new Set(activeItems.map((i) => i.cita_id))
 
   // Build occupied ranges (excludes terminal states AND the batch's own citas).
   // Known limitation: inter-sibling target collisions (two items in the same
@@ -784,7 +851,7 @@ async function toolReagendarBulkPreview({ items }) {
     (existingCitas || []).filter((c) => !batchCitaIds.has(c.id))
   )
 
-  for (const item of items) {
+  for (const item of activeItems) {
     const { nueva_fecha, nueva_hora, duracion_min, cita_id } = item
     const startMin = timeToMinutes(nueva_hora)
     const endTime = addMinutesToTime(nueva_hora, Number(duracion_min) > 0 ? Number(duracion_min) : 30)
@@ -804,12 +871,12 @@ async function toolReagendarBulkPreview({ items }) {
   }
 
   // ── INSERT one pending row ───────────────────────────────────────────────────
-  const paciente_nombres = items.map((i) => i.paciente_nombre || i.cita_id)
+  const paciente_nombres = activeItems.map((i) => i.paciente_nombre || i.cita_id)
   const { data: pending, error: insertError } = await supabase
     .from('pending_kelly_actions')
     .insert({
       action_type: 'reagendar_bulk',
-      args: { items, paciente_nombres },
+      args: { items: activeItems, paciente_nombres },
     })
     .select('id')
     .single()
@@ -817,11 +884,15 @@ async function toolReagendarBulkPreview({ items }) {
 
   // ── Build summary (truncate at 4096 chars with (+N más)) ────────────────────
   const previewId = pending?.id || 'unknown'
+  // If some citas were dropped by the guard, surface the count at the top.
+  const droppedNote = droppedCount > 0
+    ? `⚠️ ${droppedCount} cita${droppedCount !== 1 ? 's' : ''} eliminada${droppedCount !== 1 ? 's' : ''} (ya no activa${droppedCount !== 1 ? 's' : ''}).\n\n`
+    : ''
   const headerLines = [
-    `📋 Reagendamiento masivo — ${items.length} cita${items.length !== 1 ? 's' : ''}:`,
+    `${droppedNote}📋 Reagendamiento masivo — ${activeItems.length} cita${activeItems.length !== 1 ? 's' : ''}:`,
     '',
   ]
-  const itemLines = items.map((item, idx) =>
+  const itemLines = activeItems.map((item, idx) =>
     `${idx + 1}. Cita ${item.cita_id} — ${item.fecha_original} ${item.hora_original} → ${item.nueva_fecha} ${item.nueva_hora}` +
     (item.paciente_nombre ? ` (${item.paciente_nombre})` : '')
   )
@@ -839,13 +910,13 @@ async function toolReagendarBulkPreview({ items }) {
     let bodyAccum = ''
     for (const line of itemLines) {
       const candidate = `${header}\n${bodyAccum}${bodyAccum ? '\n' : ''}${line}`
-      const remaining = items.length - shown - 1
+      const remaining = activeItems.length - shown - 1
       const truncMarker = remaining > 0 ? `\n(+${remaining} más)` : ''
       if ((candidate + truncMarker + footer).length > MAX_CHARS) break
       bodyAccum = bodyAccum ? `${bodyAccum}\n${line}` : line
       shown++
     }
-    const remaining = items.length - shown
+    const remaining = activeItems.length - shown
     const truncMarker = remaining > 0 ? `\n(+${remaining} más)` : ''
     summaryText = `${header}\n${bodyAccum}${truncMarker}${footer}`
   }
