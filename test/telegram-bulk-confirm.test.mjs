@@ -6,12 +6,17 @@
  * Covers:
  *   C-2a: Happy-path — all N items applied, row marked ejecutada, ✅ N reagendadas
  *   C-2b: Partial failure — 1 item errors → N-1 applied + per-item report
+ *   C-2b-z: All items fail — ⚠️ message, no ✅ 0
  *   C-2c: Double-tap CAS reject — second confirm rejected (already ejecutada)
  *   C-2d: Expired TTL — confirm rejected, no mutation
  *   C-2e: Non-existent row — confirm rejected, no mutation
  *   C-2f: Patient lane regression — no bulk confirm reachable from patient flow
+ *   C-2g: Work-first verify — UPDATE returns 0 rows → status failed, ejecutada NOT set
+ *   C-2h: Ordering — ejecutada set only AFTER successful UPDATE
+ *   C-2i: Single-action dedup — bloqueo/evento_personal duplicate tap does NOT insert twice
  *
  * REQ-S3-03, REQ-S3-04 (best-effort), REQ-S4-01, REQ-S4-02, REQ-S5-01 / AC-05, AC-06, AC-08
+ * BUG-FIX: work-first + rows-affected verify for UPDATE actions; CAS-first preserved for INSERTs
  */
 
 import { readFileSync } from 'node:fs'
@@ -370,7 +375,8 @@ describe('C-2c resolveKellyPending(reagendar_bulk) — double-tap: CAS rejects s
           updateData: { data: null, error: null, count: 0 },
         })
       }
-      return makeBuilder(table, [])
+      // citas returns a row so the work-first UPDATE appears to succeed
+      return makeBuilder(table, [{ id: 'ok' }])
     })
 
     const { POST } = await loadRoute()
@@ -382,9 +388,17 @@ describe('C-2c resolveKellyPending(reagendar_bulk) — double-tap: CAS rejects s
       },
     }))
 
-    // No cita updates — CAS rejected
-    const citaUpdates = getUpdated()['citas']
-    expect(citaUpdates).toBeFalsy()
+    // NOTE (work-first fix): reagendar_bulk is an idempotent UPDATE.
+    // With work-first, the cita UPDATE runs BEFORE the CAS flip. When the CAS
+    // returns count:0 (another tap already won), the function returns "ya fue
+    // aplicada" — the idempotent UPDATE is harmless, no damage done.
+    // The critical safety guarantee is NOT "citas untouched" but "no ✅ Aplicado
+    // reported twice". Verify the result is "already", not "applied".
+    const toastCalls = getCapturedFetches().filter((f) => f.url.includes('answerCallbackQuery'))
+    expect(toastCalls.length).toBeGreaterThanOrEqual(1)
+    const text = JSON.parse(toastCalls[0].opts.body).text
+    // Must be "already" status — NOT "✅ N reagendadas"
+    expect(text).not.toMatch(/✅\s+\d+/)
   })
 })
 
@@ -487,5 +501,273 @@ describe('C-2f patient lane regression — bulk confirm unreachable from patient
 
     // The reagendar_bulk branch must be inside resolveKellyPending
     expect(fnBody).toMatch(/reagendar_bulk/)
+  })
+})
+
+// ─── C-2g: Work-first verify — 0 rows affected = failed (BUG-FIX) ────────────
+//
+// These tests cover the core fix: UPDATE returns 0 rows → status must be 'failed',
+// the message must NOT claim success, and ejecutada must NOT be set to true for bulk.
+//
+// With the old CAS-first code, ejecutada was set BEFORE the UPDATE, so a 0-row
+// UPDATE would still leave ejecutada=true and return ✅ — a FALSE SUCCESS.
+
+describe('C-2g work-first verify — reagendar_bulk UPDATE returning 0 rows is a failure', () => {
+  it('item UPDATE returning count:0 is counted as failed, not applied', async () => {
+    const items = [makeBulkItem(1), makeBulkItem(2)]
+    const pendingRow = makePendingBulkRow({ items })
+
+    // citas UPDATE returns count:0 (no rows matched — e.g. cita already moved/deleted)
+    mockFrom.mockImplementation((table) => {
+      if (table === 'pending_kelly_actions') return makeBuilder(table, [pendingRow])
+      if (table === 'citas') {
+        return makeBuilder(table, [], { updateData: { data: [], error: null, count: 0 } })
+      }
+      return makeBuilder(table, [])
+    })
+
+    const { POST } = await loadRoute()
+    await POST(makeRequest({
+      callback_query: {
+        id: 'cq-0rows',
+        data: 'kelly_confirm_pending-bulk-001',
+        message: { chat: { id: 999 }, message_id: 42 },
+      },
+    }))
+
+    const toastCalls = getCapturedFetches().filter((f) => f.url.includes('answerCallbackQuery'))
+    expect(toastCalls.length).toBeGreaterThanOrEqual(1)
+    const text = JSON.parse(toastCalls[0].opts.body).text
+
+    // Must NOT show success icon — both items returned 0 rows
+    expect(text).not.toMatch(/✅/)
+    expect(text).toMatch(/⚠️/)
+    expect(text).toMatch(/ninguna/i)
+  })
+
+  it('item UPDATE returning count:0 does NOT set ejecutada=true (no false-success lock)', async () => {
+    const items = [makeBulkItem(1)]
+    const pendingRow = makePendingBulkRow({ items })
+
+    // Track which update payloads reached pending_kelly_actions
+    const pendingUpdatePayloads = []
+
+    mockFrom.mockImplementation((table) => {
+      if (table === 'pending_kelly_actions') {
+        const b = makeBuilder(table, [pendingRow])
+        const origUpdate = b.update.bind(b)
+        b.update = vi.fn((payload) => {
+          pendingUpdatePayloads.push(payload)
+          return origUpdate(payload)
+        })
+        return b
+      }
+      if (table === 'citas') {
+        // UPDATE returns 0 rows
+        return makeBuilder(table, [], { updateData: { data: [], error: null, count: 0 } })
+      }
+      return makeBuilder(table, [])
+    })
+
+    const { POST } = await loadRoute()
+    await POST(makeRequest({
+      callback_query: {
+        id: 'cq-nolock',
+        data: 'kelly_confirm_pending-bulk-001',
+        message: { chat: { id: 999 }, message_id: 42 },
+      },
+    }))
+
+    // ejecutada must NOT have been set to true — work failed, so the lock is not taken
+    const executedFlip = pendingUpdatePayloads.find((p) => p.ejecutada === true)
+    expect(executedFlip).toBeFalsy()
+  })
+
+  it('mix: 1 item UPDATE returns count:1 (applied), 1 returns count:0 (failed) → partial report', async () => {
+    const items = [makeBulkItem(1), makeBulkItem(2)]
+    const pendingRow = makePendingBulkRow({ items })
+
+    let citaCallCount = 0
+    mockFrom.mockImplementation((table) => {
+      if (table === 'pending_kelly_actions') return makeBuilder(table, [pendingRow])
+      if (table === 'citas') {
+        citaCallCount++
+        const n = citaCallCount
+        if (n === 1) {
+          // First item: 1 row affected → success
+          return makeBuilder(table, [{ id: 'ok' }])
+        }
+        // Second item: 0 rows affected → failure
+        return makeBuilder(table, [], { updateData: { data: [], error: null, count: 0 } })
+      }
+      return makeBuilder(table, [])
+    })
+
+    const { POST } = await loadRoute()
+    await POST(makeRequest({
+      callback_query: {
+        id: 'cq-mix',
+        data: 'kelly_confirm_pending-bulk-001',
+        message: { chat: { id: 999 }, message_id: 42 },
+      },
+    }))
+
+    const toastCalls = getCapturedFetches().filter((f) => f.url.includes('answerCallbackQuery'))
+    const text = JSON.parse(toastCalls[0].opts.body).text
+
+    // 1 applied, 1 failed → partial message with both ✅ and ⚠️
+    expect(text).toMatch(/✅/)
+    expect(text).toMatch(/⚠️/)
+    expect(text).toMatch(/1/)
+  })
+})
+
+// ─── C-2h: Ordering — ejecutada set AFTER successful work (work-first) ────────
+//
+// Verifies the fix ordering: citas UPDATE happens first, ejecutada flip happens
+// only if (and after) the work succeeded. This prevents the false-success
+// scenario where the lock is taken but the side-effect is never completed.
+
+describe('C-2h work-first ordering — ejecutada is set only after UPDATE succeeds', () => {
+  it('citas UPDATE is called before the pending_kelly_actions ejecutada flip', async () => {
+    const items = [makeBulkItem(1)]
+    const pendingRow = makePendingBulkRow({ items })
+
+    const callOrder = []
+
+    mockFrom.mockImplementation((table) => {
+      if (table === 'pending_kelly_actions') {
+        const b = makeBuilder(table, [pendingRow])
+        const origUpdate = b.update.bind(b)
+        b.update = vi.fn((payload) => {
+          if (payload.ejecutada === true) callOrder.push('lock_ejecutada')
+          return origUpdate(payload)
+        })
+        return b
+      }
+      if (table === 'citas') {
+        const b = makeBuilder(table, [{ id: 'ok' }])
+        const origUpdate = b.update.bind(b)
+        b.update = vi.fn((payload) => {
+          callOrder.push('cita_update')
+          return origUpdate(payload)
+        })
+        return b
+      }
+      return makeBuilder(table, [])
+    })
+
+    const { POST } = await loadRoute()
+    await POST(makeRequest({
+      callback_query: {
+        id: 'cq-order',
+        data: 'kelly_confirm_pending-bulk-001',
+        message: { chat: { id: 999 }, message_id: 42 },
+      },
+    }))
+
+    // cita_update must appear before lock_ejecutada in the call sequence
+    const citaIdx = callOrder.indexOf('cita_update')
+    const lockIdx = callOrder.indexOf('lock_ejecutada')
+    expect(citaIdx).toBeGreaterThanOrEqual(0)
+    expect(lockIdx).toBeGreaterThanOrEqual(0)
+    expect(citaIdx).toBeLessThan(lockIdx)
+  })
+})
+
+// ─── C-2i: INSERT dedup — bloqueo/evento_personal CAS-first preserved ─────────
+//
+// INSERTs are NOT idempotent (running twice creates duplicate rows).
+// For these action types the CAS lock must still be taken BEFORE the INSERT.
+// A duplicate Telegram delivery (second tap) must be rejected by the CAS
+// without a second INSERT.
+
+describe('C-2i INSERT dedup — bloqueo and evento_personal: duplicate delivery does NOT insert twice', () => {
+  it('bloqueo: second tap (CAS count:0) does NOT produce a second citas insert', async () => {
+    const pending = {
+      id: 'pending-bloqueo-dedup',
+      action_type: 'bloqueo',
+      ejecutada: false,
+      expira_at: new Date(Date.now() + 3600_000).toISOString(),
+      args: { fecha: '2026-06-10', hora: '08:00', duracion_min: 60, motivo: 'Reunión' },
+    }
+
+    // CAS UPDATE returns count:0 → second tap lost the lock
+    mockFrom.mockImplementation((table) => {
+      if (table === 'pending_kelly_actions') {
+        return makeBuilder(table, [pending], { updateData: { data: null, error: null, count: 0 } })
+      }
+      return makeBuilder(table, [])
+    })
+
+    const { POST } = await loadRoute()
+    await POST(makeRequest({
+      callback_query: {
+        id: 'cq-bloqueo-dedup',
+        data: 'kelly_confirm_pending-bloqueo-dedup',
+        message: { chat: { id: 999 }, message_id: 1 },
+      },
+    }))
+
+    // No citas insert should have happened — CAS rejected before any side-effect
+    expect(getInserted()['citas']).toBeUndefined()
+  })
+
+  it('evento_personal: second tap (CAS count:0) does NOT insert a duplicate citas or tareas row', async () => {
+    const pending = {
+      id: 'pending-evento-dedup',
+      action_type: 'evento_personal',
+      ejecutada: false,
+      expira_at: new Date(Date.now() + 3600_000).toISOString(),
+      args: { fecha: '2026-06-10', hora: '09:00', duracion_min: 45, motivo: 'Control médico', recordar_min_antes: 30 },
+    }
+
+    mockFrom.mockImplementation((table) => {
+      if (table === 'pending_kelly_actions') {
+        return makeBuilder(table, [pending], { updateData: { data: null, error: null, count: 0 } })
+      }
+      return makeBuilder(table, [])
+    })
+
+    const { POST } = await loadRoute()
+    await POST(makeRequest({
+      callback_query: {
+        id: 'cq-evento-dedup',
+        data: 'kelly_confirm_pending-evento-dedup',
+        message: { chat: { id: 999 }, message_id: 1 },
+      },
+    }))
+
+    // Neither citas nor tareas should have been inserted — CAS blocked the side-effect
+    expect(getInserted()['citas']).toBeUndefined()
+    expect(getInserted()['tareas']).toBeUndefined()
+  })
+
+  it('bloqueo: first tap (CAS count:1) still runs the citas insert', async () => {
+    const pending = {
+      id: 'pending-bloqueo-first',
+      action_type: 'bloqueo',
+      ejecutada: false,
+      expira_at: new Date(Date.now() + 3600_000).toISOString(),
+      args: { fecha: '2026-06-10', hora: '08:00', duracion_min: 60, motivo: 'Reunión' },
+    }
+
+    // CAS UPDATE returns count:1 → first tap wins the lock
+    mockFrom.mockImplementation((table) => {
+      if (table === 'pending_kelly_actions') return makeBuilder(table, [pending])
+      return makeBuilder(table, [])
+    })
+
+    const { POST } = await loadRoute()
+    await POST(makeRequest({
+      callback_query: {
+        id: 'cq-bloqueo-first',
+        data: 'kelly_confirm_pending-bloqueo-first',
+        message: { chat: { id: 999 }, message_id: 1 },
+      },
+    }))
+
+    const citasInserts = getInserted()['citas'] ?? []
+    expect(citasInserts.length).toBeGreaterThan(0)
   })
 })
