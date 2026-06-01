@@ -603,7 +603,7 @@ describe('PR2b: clearKellyContext on reagendar_bulk confirm', () => {
     expect(eqDeleteMock).toHaveBeenCalledWith('chat_id', CHAT_ID)
   })
 
-  it('does NOT call clearKellyContext on reagendar_bulk CANCEL', async () => {
+  it('DOES call clearKellyContext on reagendar_bulk CANCEL (fix: clear on any bulk action outcome)', async () => {
     const deleteMock = vi.fn().mockReturnThis()
     const eqDeleteMock = vi.fn().mockResolvedValue({ data: null, error: null })
 
@@ -637,7 +637,60 @@ describe('PR2b: clearKellyContext on reagendar_bulk confirm', () => {
       })
     )
 
-    expect(deleteMock).not.toHaveBeenCalled()
+    // Fix 1: cancel of a reagendar_bulk action must clear context
+    expect(deleteMock).toHaveBeenCalled()
+    expect(eqDeleteMock).toHaveBeenCalledWith('chat_id', CHAT_ID)
+  })
+
+  it('calls clearKellyContext on reagendar_bulk confirm with total failure (applied === 0)', async () => {
+    const deleteMock = vi.fn().mockReturnThis()
+    const eqDeleteMock = vi.fn().mockResolvedValue({ data: null, error: null })
+
+    const pendingRow = {
+      id: 'pending-3',
+      action_type: 'reagendar_bulk',
+      args: {
+        items: [
+          { cita_id: 'uuid-a', nueva_fecha: '2026-06-11', nueva_hora: '10:00' },
+        ],
+      },
+      ejecutada: false,
+      expira_at: new Date(Date.now() + 10 * 60 * 1000).toISOString(),
+    }
+
+    mockFrom.mockImplementation((table) => {
+      if (table === 'telegram_kelly_context') {
+        return { delete: deleteMock, eq: eqDeleteMock }
+      }
+      if (table === 'pending_kelly_actions') {
+        return makeBuilder(table, [pendingRow])
+      }
+      if (table === 'citas') {
+        // All updates fail → applied === 0
+        return {
+          ...makeBuilder(table, []),
+          update: vi.fn().mockReturnValue({
+            eq: vi.fn().mockResolvedValue({ data: null, error: { message: 'DB error' } }),
+          }),
+        }
+      }
+      return makeBuilder(table, [])
+    })
+
+    const { POST } = await loadRoute()
+    await POST(
+      makeRequest({
+        callback_query: {
+          id: 'cq3',
+          message: { chat: { id: 999 }, message_id: 1 },
+          data: 'kelly_confirm_pending-3',
+        },
+      })
+    )
+
+    // Fix 2: total failure must also clear context
+    expect(deleteMock).toHaveBeenCalled()
+    expect(eqDeleteMock).toHaveBeenCalledWith('chat_id', CHAT_ID)
   })
 })
 
@@ -756,5 +809,191 @@ describe('PR2b: two-turn integration (search → movelas → reagendar_bulk)', (
     // The LLM response had reagendar_bulk → toolReagendarBulkPreview should have run
     const sends = getCapturedFetches().filter((f) => f.url.includes('sendMessage'))
     expect(sends.length).toBeGreaterThanOrEqual(2) // turn1 list + turn2 preview/reply
+  })
+})
+
+// ─── Test: topic-change clear (Fix 3) ────────────────────────────────────────
+
+describe('PR2b fix: topic-change clear when non-bulk tool picked with injected context', () => {
+  beforeEach(() => resetTelegramState())
+  afterEach(() => teardownTelegramMocks())
+
+  it('calls clearKellyContext when context was injected and LLM picks consultar_finanzas', async () => {
+    const freshRow = makeFreshContextRow()
+    const deleteMock = vi.fn().mockReturnThis()
+    const eqDeleteMock = vi.fn().mockResolvedValue({ data: null, error: null })
+
+    mockFrom.mockImplementation((table) => {
+      if (table === 'telegram_kelly_context') {
+        return {
+          select: vi.fn().mockReturnThis(),
+          eq: vi.fn().mockReturnValue({
+            single: vi.fn().mockResolvedValue({ data: freshRow, error: null }),
+          }),
+          upsert: vi.fn().mockResolvedValue({ data: null, error: null }),
+          delete: deleteMock,
+        }
+      }
+      // consultar_finanzas needs a citas query for income totals
+      return makeBuilder(table, [])
+    })
+
+    const { getModelAdapter } = await import('@/lib/model-adapter')
+    vi.mocked(getModelAdapter).mockResolvedValueOnce({
+      chat: vi.fn(async () =>
+        JSON.stringify({ tool: 'consultar_finanzas', args: { fecha_desde: '2026-06-01', fecha_hasta: '2026-06-30' } })
+      ),
+    })
+
+    const { POST } = await loadRoute()
+    await POST(
+      makeRequest({
+        message: { chat: { id: 999 }, from: { id: 999 }, text: '¿Cuánto ingresé en junio?' },
+      })
+    )
+
+    // Fix 3: topic-change → context cleared
+    expect(deleteMock).toHaveBeenCalled()
+  })
+
+  it('does NOT call clearKellyContext (topic-change path) when tool is buscar_citas_bulk (overwrites instead)', async () => {
+    const freshRow = makeFreshContextRow()
+    const deleteMock = vi.fn().mockReturnThis()
+    const eqDeleteMock = vi.fn().mockResolvedValue({ data: null, error: null })
+    const upsertMock = vi.fn().mockResolvedValue({ data: null, error: null })
+
+    mockFrom.mockImplementation((table) => {
+      if (table === 'telegram_kelly_context') {
+        return {
+          select: vi.fn().mockReturnThis(),
+          eq: vi.fn().mockReturnValue({
+            single: vi.fn().mockResolvedValue({ data: freshRow, error: null }),
+          }),
+          upsert: upsertMock,
+          delete: deleteMock,
+        }
+      }
+      if (table === 'citas') return makeCitasBuilder()
+      return makeBuilder(table, [])
+    })
+
+    const { getModelAdapter } = await import('@/lib/model-adapter')
+    vi.mocked(getModelAdapter).mockResolvedValueOnce({
+      chat: vi.fn(async () =>
+        JSON.stringify({
+          tool: 'buscar_citas_bulk',
+          args: { fecha_desde: '2026-06-10', fecha_hasta: '2026-06-10', zona: 'norte' },
+        })
+      ),
+    })
+
+    const { POST } = await loadRoute()
+    await POST(
+      makeRequest({
+        message: { chat: { id: 999 }, from: { id: 999 }, text: 'buscar de nuevo' },
+      })
+    )
+
+    // buscar_citas_bulk writes (overwrites) context — must NOT also delete it
+    expect(upsertMock).toHaveBeenCalled()
+    expect(deleteMock).not.toHaveBeenCalled()
+  })
+
+  it('does NOT call clearKellyContext (topic-change path) when tool is reagendar_bulk (context consumed on confirm)', async () => {
+    const freshRow = makeFreshContextRow()
+    const deleteMock = vi.fn().mockReturnThis()
+    const eqDeleteMock = vi.fn().mockResolvedValue({ data: null, error: null })
+
+    mockFrom.mockImplementation((table) => {
+      if (table === 'telegram_kelly_context') {
+        return {
+          select: vi.fn().mockReturnThis(),
+          eq: vi.fn().mockReturnValue({
+            single: vi.fn().mockResolvedValue({ data: freshRow, error: null }),
+          }),
+          upsert: vi.fn().mockResolvedValue({ data: null, error: null }),
+          delete: deleteMock,
+        }
+      }
+      if (table === 'pending_kelly_actions') {
+        return {
+          ...makeBuilder(table, []),
+          insert: vi.fn().mockResolvedValue({ data: [{ id: 'p-new' }], error: null }),
+          select: vi.fn().mockReturnThis(),
+        }
+      }
+      if (table === 'citas') return makeBuilder(table, MOCK_CITAS_ROWS)
+      return makeBuilder(table, [])
+    })
+
+    const { getModelAdapter } = await import('@/lib/model-adapter')
+    vi.mocked(getModelAdapter).mockResolvedValueOnce({
+      chat: vi.fn(async () =>
+        JSON.stringify({
+          tool: 'reagendar_bulk',
+          args: {
+            items: [
+              { cita_id: 'uuid-a', nueva_fecha: '2026-06-11', nueva_hora: '15:00', duracion_min: 30 },
+            ],
+          },
+        })
+      ),
+    })
+
+    const { POST } = await loadRoute()
+    await POST(
+      makeRequest({
+        message: { chat: { id: 999 }, from: { id: 999 }, text: 'movelas a las 3pm' },
+      })
+    )
+
+    // reagendar_bulk leaves context alive for the confirm step — must NOT clear here
+    expect(deleteMock).not.toHaveBeenCalled()
+  })
+})
+
+// ─── Test: softened injection wording (Fix 4) ────────────────────────────────
+
+describe('PR2b fix: softened injection instruction wording', () => {
+  beforeEach(() => resetTelegramState())
+  afterEach(() => teardownTelegramMocks())
+
+  it('injection block contains conditional/guarded instruction (not blanket directive)', async () => {
+    const freshRow = makeFreshContextRow()
+    mockFrom.mockImplementation((table) => {
+      if (table === 'telegram_kelly_context') {
+        return {
+          select: vi.fn().mockReturnThis(),
+          eq: vi.fn().mockReturnThis(),
+          single: vi.fn().mockResolvedValue({ data: freshRow, error: null }),
+          upsert: vi.fn().mockResolvedValue({ data: null, error: null }),
+          delete: vi.fn().mockReturnThis(),
+        }
+      }
+      return makeBuilder(table, [])
+    })
+
+    const { getModelAdapter } = await import('@/lib/model-adapter')
+    let capturedUserText = null
+    vi.mocked(getModelAdapter).mockResolvedValueOnce({
+      chat: vi.fn(async ({ userText }) => {
+        capturedUserText = userText
+        return JSON.stringify({ tool: 'responder_texto', args: { texto: 'ok' } })
+      }),
+    })
+
+    const { POST } = await loadRoute()
+    await POST(
+      makeRequest({
+        message: { chat: { id: 999 }, from: { id: 999 }, text: 'algo cualquiera' },
+      })
+    )
+
+    expect(capturedUserText).toContain('[Contexto:')
+    // Fix 4: must contain a conditional guard phrase, not the old blanket "Si Kely pide mover"
+    // The new wording must reference explicit pronouns like "esas" or guard words
+    expect(capturedUserText).toMatch(/esas.*citas|explícitamente|Solo si/i)
+    // Must NOT contain the old unconditional phrase
+    expect(capturedUserText).not.toMatch(/^.*Si Kely pide mover\/reagendar.*emite reagendar_bulk/m)
   })
 })

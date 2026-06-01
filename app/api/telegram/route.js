@@ -323,7 +323,7 @@ async function handleKellyMessage(text) {
     userText +=
       `\n[Contexto: última búsqueda (${zonaStr}${fechaStr}${horaStr}) — ${citas.length} citas:\n` +
       citaLines +
-      `\n]\nSi Kely pide mover/reagendar "esas"/"todas", emite reagendar_bulk con estos cita_id y duracion_min.`;
+      `\n]\nSolo si Kely se refiere explícitamente a ESAS citas (dice "esas", "todas", "las de la búsqueda"), emite reagendar_bulk con estos cita_id y duracion_min. Si pide otra cosa, ignorá esta lista.`;
   }
   // PR2b (D4): raise maxTokens conditionally — a reagendar_bulk JSON with up to 12
   // items can exceed 500 output tokens; keep 500 for normal turns to control cost.
@@ -373,6 +373,15 @@ async function handleKellyMessage(text) {
     // Dispatcher: consume preview return and drive the Telegram send from one place.
     if (toolResult?.kind === 'preview') {
       await sendToKelyWithButtons(toolResult.summary, toolResult.keyboard);
+    }
+    // Fix 3 (topic-change clear): if context was injected this turn but the LLM
+    // chose an unrelated tool, clear the stale search now so it does not carry
+    // over and bias future turns.
+    // - buscar_citas_bulk: already overwrites context via writeKellyContext → skip clear.
+    // - reagendar_bulk: context is kept alive for the upcoming confirm step → skip clear.
+    // - everything else: the user changed topic → clear.
+    if (kellyCtx && parsed.tool !== 'buscar_citas_bulk' && parsed.tool !== 'reagendar_bulk') {
+      await clearKellyContext();
     }
   } catch (err) {
     console.error(`[Telegram/kelly] Error en tool ${parsed.tool}:`, err?.message || err);
@@ -1402,8 +1411,12 @@ async function resolveKellyPending(pendingId, confirmar) {
     return { kind: 'result', status: 'already', message: 'ℹ️ Ya fue aplicada.' };
   }
 
-  // We won the lock. For cancel: no side-effect needed.
+  // We won the lock. For cancel of a reagendar_bulk action: clear context so the
+  // stale search does not linger and bias the next turn (Fix 1 — clear on cancel).
   if (!confirmar) {
+    if (pending.action_type === 'reagendar_bulk') {
+      await clearKellyContext();
+    }
     return { kind: 'result', status: 'cancelled', message: '↩️ Cancelado.' };
   }
 
@@ -1430,6 +1443,10 @@ async function resolveKellyPending(pendingId, confirmar) {
         .filter((r) => !r.ok)
         .map((r) => `• ${r.cita_id}: ${r.error || 'error desconocido'}`)
         .join('\n');
+      // Fix 2: clear context on ALL outcomes of a bulk confirm (success, partial,
+      // or total failure). The search is consumed the moment the user acted on it;
+      // leaving it would bias the next unrelated turn.
+      await clearKellyContext();
       if (applied === 0) {
         return {
           kind: 'result',
@@ -1437,9 +1454,6 @@ async function resolveKellyPending(pendingId, confirmar) {
           message: `⚠️ No se pudo reagendar ninguna cita (${failed} fallaron):\n${failList}`,
         };
       }
-      // PR2b (D5): at least one cita was successfully moved — clear the stale search
-      // context so the next conversation starts clean.
-      await clearKellyContext();
       if (failed === 0) {
         return { kind: 'result', status: 'applied', message: `✅ ${applied} cita${applied !== 1 ? 's' : ''} reagendada${applied !== 1 ? 's' : ''}.` };
       }
