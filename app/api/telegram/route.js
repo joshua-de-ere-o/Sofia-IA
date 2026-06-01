@@ -302,11 +302,36 @@ async function handleKellyMessage(text) {
   const ctx = guayaquilParts();
   const primerMensaje = await esPrimerMensajeDelDia(ctx.fecha);
 
-  const userText = `[Hoy es ${ctx.legible}]\n[Primer mensaje del día: ${primerMensaje ? 'sí' : 'no'}]\n\nMensaje de Kely:\n"${text}"`;
+  let userText = `[Hoy es ${ctx.legible}]\n[Primer mensaje del día: ${primerMensaje ? 'sí' : 'no'}]\n\nMensaje de Kely:\n"${text}"`;
+
+  // PR2b (D3): inject last-search context into userText (NOT systemPrompt) so the
+  // LLM can emit reagendar_bulk with real cita_ids without re-searching.
+  // Injected only when context is fresh (<30 min); no-op otherwise.
+  const kellyCtx = await readKellyContext();
+  if (kellyCtx) {
+    const { criteria, citas } = kellyCtx;
+    const zonaStr  = criteria.zona       ? `zona ${criteria.zona}, ` : '';
+    const fechaStr = criteria.fecha_desde === criteria.fecha_hasta
+      ? criteria.fecha_desde
+      : `${criteria.fecha_desde}–${criteria.fecha_hasta}`;
+    const horaStr  = (criteria.hora_desde && criteria.hora_hasta)
+      ? ` ${criteria.hora_desde}-${criteria.hora_hasta}`
+      : '';
+    const citaLines = citas
+      .map((c) => `  - ${c.cita_id} ${c.paciente_nombre} ${c.fecha} ${c.hora} ${c.duracion_min}min`)
+      .join('\n');
+    userText +=
+      `\n[Contexto: última búsqueda (${zonaStr}${fechaStr}${horaStr}) — ${citas.length} citas:\n` +
+      citaLines +
+      `\n]\nSolo si Kely se refiere explícitamente a ESAS citas (dice "esas", "todas", "las de la búsqueda"), emite reagendar_bulk con estos cita_id y duracion_min. Si pide otra cosa, ignorá esta lista.`;
+  }
+  // PR2b (D4): raise maxTokens conditionally — a reagendar_bulk JSON with up to 12
+  // items can exceed 500 output tokens; keep 500 for normal turns to control cost.
+  const maxTokens = kellyCtx ? 900 : 500;
 
   let raw;
   try {
-    raw = await adapter.chat({ systemPrompt: KELLY_SYSTEM_PROMPT, userText, maxTokens: 500 });
+    raw = await adapter.chat({ systemPrompt: KELLY_SYSTEM_PROMPT, userText, maxTokens });
   } catch (err) {
     console.error('[Telegram/kelly] Error LLM:', err?.message || err);
     await sendToKely('⚠️ Tuve un problema procesando tu mensaje. Intenta de nuevo en un rato.');
@@ -328,8 +353,8 @@ async function handleKellyMessage(text) {
       case 'consultar_agenda':        await toolConsultarAgenda(args); break;
       case 'consultar_finanzas':      await toolConsultarFinanzas(args); break;
       case 'buscar_citas_bulk': {
-        // PR2a: capture result and persist context (write side only).
-        // Injection into userText (read side) is PR2b.
+        // Capture result and persist context (write side). Read/inject side happens
+        // above (readKellyContext before adapter.chat) so it applies on the NEXT turn.
         const bulkResult = await toolBuscarCitasBulk(args);
         if (bulkResult) await writeKellyContext(bulkResult.criteria, bulkResult.citas);
         break;
@@ -348,6 +373,15 @@ async function handleKellyMessage(text) {
     // Dispatcher: consume preview return and drive the Telegram send from one place.
     if (toolResult?.kind === 'preview') {
       await sendToKelyWithButtons(toolResult.summary, toolResult.keyboard);
+    }
+    // Fix 3 (topic-change clear): if context was injected this turn but the LLM
+    // chose an unrelated tool, clear the stale search now so it does not carry
+    // over and bias future turns.
+    // - buscar_citas_bulk: already overwrites context via writeKellyContext → skip clear.
+    // - reagendar_bulk: context is kept alive for the upcoming confirm step → skip clear.
+    // - everything else: the user changed topic → clear.
+    if (kellyCtx && parsed.tool !== 'buscar_citas_bulk' && parsed.tool !== 'reagendar_bulk') {
+      await clearKellyContext();
     }
   } catch (err) {
     console.error(`[Telegram/kelly] Error en tool ${parsed.tool}:`, err?.message || err);
@@ -1377,8 +1411,12 @@ async function resolveKellyPending(pendingId, confirmar) {
     return { kind: 'result', status: 'already', message: 'ℹ️ Ya fue aplicada.' };
   }
 
-  // We won the lock. For cancel: no side-effect needed.
+  // We won the lock. For cancel of a reagendar_bulk action: clear context so the
+  // stale search does not linger and bias the next turn (Fix 1 — clear on cancel).
   if (!confirmar) {
+    if (pending.action_type === 'reagendar_bulk') {
+      await clearKellyContext();
+    }
     return { kind: 'result', status: 'cancelled', message: '↩️ Cancelado.' };
   }
 
@@ -1405,6 +1443,10 @@ async function resolveKellyPending(pendingId, confirmar) {
         .filter((r) => !r.ok)
         .map((r) => `• ${r.cita_id}: ${r.error || 'error desconocido'}`)
         .join('\n');
+      // Fix 2: clear context on ALL outcomes of a bulk confirm (success, partial,
+      // or total failure). The search is consumed the moment the user acted on it;
+      // leaving it would bias the next unrelated turn.
+      await clearKellyContext();
       if (applied === 0) {
         return {
           kind: 'result',
