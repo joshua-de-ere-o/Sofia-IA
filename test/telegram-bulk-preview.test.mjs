@@ -592,6 +592,11 @@ describe('C-1 source contract — toolReagendarBulkPreview defined in route.js',
 })
 
 // ─── C-1b: Happy-path: N ≤ 12 items → 1 pending row INSERT ───────────────────
+//
+// PR3: the anti-hallucination guard re-SELECTs cita_ids from the DB before INSERT.
+// These tests must mock citas to return the batch item ids as active rows so the
+// guard passes. Returning the original slots (fecha_original/hora_original) is safe:
+// batchCitaIds excludes them from the overlap check, preventing false collisions.
 
 describe('C-1b toolReagendarBulkPreview — happy path: inserts ONE pending row', () => {
   it('inserts exactly one pending_kelly_actions row with action_type reagendar_bulk', async () => {
@@ -602,9 +607,19 @@ describe('C-1b toolReagendarBulkPreview — happy path: inserts ONE pending row'
       args: { items },
     })
 
-    // citas returns occupied rows for overlap check (not conflicting with nueva_hora 10:00)
+    // Guard re-SELECT needs cita ids to exist and be active (non-excluded state).
+    // Return original slots so they pass the guard; batchCitaIds excludes them from
+    // overlap detection so they don't cause false conflicts.
+    const activeCitas = items.map((item) => ({
+      id: item.cita_id,
+      estado: 'confirmada',
+      fecha: item.fecha_original,
+      hora: item.hora_original + ':00',
+      duracion_min: item.duracion_min,
+    }))
+
     mockFrom.mockImplementation((table) => {
-      if (table === 'citas') return makeBuilder(table, [])
+      if (table === 'citas') return makeBuilder(table, activeCitas)
       if (table === 'pending_kelly_actions') return makeBuilder(table, [{ id: 'new-bulk-id' }])
       return makeBuilder(table, [])
     })
@@ -625,8 +640,16 @@ describe('C-1b toolReagendarBulkPreview — happy path: inserts ONE pending row'
 
     setAdapterResponse({ tool: 'reagendar_bulk', args: { items } })
 
+    const activeCitas = items.map((item) => ({
+      id: item.cita_id,
+      estado: 'confirmada',
+      fecha: item.fecha_original,
+      hora: item.hora_original + ':00',
+      duracion_min: item.duracion_min,
+    }))
+
     mockFrom.mockImplementation((table) => {
-      if (table === 'citas') return makeBuilder(table, [])
+      if (table === 'citas') return makeBuilder(table, activeCitas)
       if (table === 'pending_kelly_actions') return makeBuilder(table, [{ id: 'bulk-id' }])
       return makeBuilder(table, [])
     })
@@ -649,8 +672,16 @@ describe('C-1b toolReagendarBulkPreview — happy path: inserts ONE pending row'
 
     setAdapterResponse({ tool: 'reagendar_bulk', args: { items } })
 
+    const activeCitas = items.map((item) => ({
+      id: item.cita_id,
+      estado: 'confirmada',
+      fecha: item.fecha_original,
+      hora: item.hora_original + ':00',
+      duracion_min: item.duracion_min,
+    }))
+
     mockFrom.mockImplementation((table) => {
-      if (table === 'citas') return makeBuilder(table, [])
+      if (table === 'citas') return makeBuilder(table, activeCitas)
       if (table === 'pending_kelly_actions') return makeBuilder(table, [{ id: 'bulk-id' }])
       return makeBuilder(table, [])
     })
@@ -679,8 +710,11 @@ describe('C-1b toolReagendarBulkPreview — happy path: inserts ONE pending row'
 
     setAdapterResponse({ tool: 'reagendar_bulk', args: { items } })
 
+    // Guard needs the cita_id to exist and be active.
+    const activeCitas = [{ id: 'cita-name-1', estado: 'confirmada', fecha: '2026-06-10', hora: '09:00:00', duracion_min: 45 }]
+
     mockFrom.mockImplementation((table) => {
-      if (table === 'citas') return makeBuilder(table, [])
+      if (table === 'citas') return makeBuilder(table, activeCitas)
       if (table === 'pending_kelly_actions') return makeBuilder(table, [{ id: 'name-bulk-id' }])
       return makeBuilder(table, [])
     })
@@ -713,8 +747,18 @@ describe('C-1c summary truncation — (+N más) when near 4096-char limit', () =
 
     setAdapterResponse({ tool: 'reagendar_bulk', args: { items } })
 
+    // PR3 guard: return active rows for all cita_ids so validation passes.
+    // Original slots are excluded from overlap check via batchCitaIds.
+    const activeCitas = items.map((item) => ({
+      id: item.cita_id,
+      estado: 'confirmada',
+      fecha: item.fecha_original,
+      hora: item.hora_original + ':00',
+      duracion_min: item.duracion_min,
+    }))
+
     mockFrom.mockImplementation((table) => {
-      if (table === 'citas') return makeBuilder(table, [])
+      if (table === 'citas') return makeBuilder(table, activeCitas)
       if (table === 'pending_kelly_actions') return makeBuilder(table, [{ id: 'bulk-id' }])
       return makeBuilder(table, [])
     })
@@ -843,6 +887,9 @@ describe('C-1g toolReagendarBulkPreview — self-collision excluded: same-day re
 
     // The DB returns the cita's own current row — the only "occupied" slot is itself.
     // After the fix, this row must be EXCLUDED from collision detection.
+    // PR3 guard: the same row also serves as the "live cita" for re-validation
+    // (id = 'cita-self', non-excluded estado), so the guard passes and the cita
+    // is also excluded from the overlap check via batchCitaIds.
     const ownCita = {
       id: 'cita-self',        // same id as cita_id in the batch
       fecha: '2026-06-15',

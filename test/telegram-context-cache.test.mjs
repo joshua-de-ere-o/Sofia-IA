@@ -279,7 +279,9 @@ describe('toolBuscarCitasBulk return value', () => {
     mockFrom.mockImplementation((table) => {
       if (table === 'citas') return makeCitasBuilder()
       if (table === 'telegram_kelly_context') {
-        return { upsert: vi.fn().mockResolvedValue({ data: null, error: null }) }
+        // makeKellyContextBuilder provides select/eq/single (for readKellyContext) AND
+        // upsert (for writeKellyContext) — eliminates the "select is not a function" stderr.
+        return makeKellyContextBuilder(null)
       }
       return makeBuilder(table, [])
     })
@@ -308,7 +310,8 @@ describe('toolBuscarCitasBulk return value', () => {
     mockFrom.mockImplementation((table) => {
       if (table === 'citas') return makeCitasBuilder()
       if (table === 'telegram_kelly_context') {
-        return { upsert: vi.fn().mockResolvedValue({ data: null, error: null }) }
+        // Full builder with select/eq/single for read side (PR2b) + upsert for write side.
+        return makeKellyContextBuilder(null)
       }
       return makeBuilder(table, [])
     })
@@ -345,7 +348,11 @@ describe('dispatcher write-side wiring', () => {
 
     mockFrom.mockImplementation((table) => {
       if (table === 'citas') return makeCitasBuilder()
-      if (table === 'telegram_kelly_context') return { upsert: upsertMock }
+      if (table === 'telegram_kelly_context') {
+        // Full builder with read path (select/eq/single) so readKellyContext
+        // doesn't throw-and-swallow before the buscar_citas_bulk dispatch.
+        return { ...makeKellyContextBuilder(null), upsert: upsertMock }
+      }
       return makeBuilder(table, [])
     })
 
@@ -383,7 +390,10 @@ describe('dispatcher write-side wiring', () => {
     const upsertMock = vi.fn().mockResolvedValue({ data: null, error: null })
 
     mockFrom.mockImplementation((table) => {
-      if (table === 'telegram_kelly_context') return { upsert: upsertMock }
+      if (table === 'telegram_kelly_context') {
+        // Full builder with read path so readKellyContext doesn't throw-and-swallow.
+        return { ...makeKellyContextBuilder(null), upsert: upsertMock }
+      }
       return makeBuilder(table, [])
     })
 
