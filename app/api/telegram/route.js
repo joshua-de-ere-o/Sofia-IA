@@ -327,7 +327,13 @@ async function handleKellyMessage(text) {
     switch (parsed.tool) {
       case 'consultar_agenda':        await toolConsultarAgenda(args); break;
       case 'consultar_finanzas':      await toolConsultarFinanzas(args); break;
-      case 'buscar_citas_bulk':       await toolBuscarCitasBulk(args); break;
+      case 'buscar_citas_bulk': {
+        // PR2a: capture result and persist context (write side only).
+        // Injection into userText (read side) is PR2b.
+        const bulkResult = await toolBuscarCitasBulk(args);
+        if (bulkResult) await writeKellyContext(bulkResult.criteria, bulkResult.citas);
+        break;
+      }
       case 'reagendar_bulk':          toolResult = await toolReagendarBulkPreview(args); break;
       case 'reagendar_cita_kelly':    toolResult = await toolReagendarCita(args); break;
       case 'cancelar_cita_kelly':     toolResult = await toolCancelarCita(args); break;
@@ -473,6 +479,80 @@ async function buscarCitasDePaciente(pacienteId, fechaActual) {
 // Active states: exclude terminal/inactive states per REQ-S2-01
 const BULK_EXCLUDED_STATES = ['cancelada', 'no_show', 'rechazada']
 
+// ─── Context cache helpers (PR2a) ────────────────────────────────────────────
+//
+// Single-operator design: cache key = process.env.TELEGRAM_CHAT_ID.
+// No chatId param threading required (decision #494 — single operator env).
+// All three helpers swallow errors so a missing/failed table never breaks the
+// search flow (design D8 / REQ-2.5).
+
+const KELLY_CONTEXT_TTL_MS = 30 * 60 * 1000 // 30 minutes
+
+/**
+ * Persist the last bulk-search result to telegram_kelly_context.
+ * Upserts keyed by TELEGRAM_CHAT_ID. Swallows all errors.
+ *
+ * @param {{ zona?: string, fecha_desde: string, fecha_hasta: string, hora_desde?: string, hora_hasta?: string }} criteria
+ * @param {Array<{ cita_id: string, paciente_nombre: string, fecha: string, hora: string, duracion_min: number }>} citas
+ */
+export async function writeKellyContext(criteria, citas) {
+  try {
+    const chatId = process.env.TELEGRAM_CHAT_ID;
+    const { error } = await supabase.from('telegram_kelly_context').upsert({
+      chat_id: chatId,
+      last_search: { criteria, citas },
+      updated_at: new Date().toISOString(),
+    });
+    if (error) {
+      console.warn('[telegram/context] writeKellyContext error (swallowed):', error.message);
+    }
+  } catch (err) {
+    console.warn('[telegram/context] writeKellyContext threw (swallowed):', err?.message || err);
+  }
+}
+
+/**
+ * Read the last bulk-search context for the operator.
+ * Returns null if the row is missing, stale (>30 min), or a table error occurs.
+ *
+ * @returns {Promise<{ criteria: object, citas: Array } | null>}
+ */
+export async function readKellyContext() {
+  try {
+    const chatId = process.env.TELEGRAM_CHAT_ID;
+    const { data, error } = await supabase
+      .from('telegram_kelly_context')
+      .select('last_search, updated_at')
+      .eq('chat_id', chatId)
+      .single();
+    if (error || !data) return null;
+    const ageMs = Date.now() - new Date(data.updated_at).getTime();
+    if (ageMs > KELLY_CONTEXT_TTL_MS) return null;
+    return data.last_search ?? null;
+  } catch (err) {
+    console.warn('[telegram/context] readKellyContext threw (swallowed):', err?.message || err);
+    return null;
+  }
+}
+
+/**
+ * Delete the operator's context row. Swallows all errors.
+ */
+export async function clearKellyContext() {
+  try {
+    const chatId = process.env.TELEGRAM_CHAT_ID;
+    const { error } = await supabase
+      .from('telegram_kelly_context')
+      .delete()
+      .eq('chat_id', chatId);
+    if (error) {
+      console.warn('[telegram/context] clearKellyContext error (swallowed):', error.message);
+    }
+  } catch (err) {
+    console.warn('[telegram/context] clearKellyContext threw (swallowed):', err?.message || err);
+  }
+}
+
 /**
  * Query active citas in a date range, optionally filtered by zona.
  * Returns a formatted candidate list or a clarification if no results.
@@ -601,6 +681,21 @@ async function toolBuscarCitasBulk({ zona, fecha_desde, fecha_hasta, estado, hor
   }
 
   await sendToKely(lines.join('\n'))
+
+  // PR2a: return structured result so the dispatcher can persist context (D5 root-cause fix).
+  // Map DB rows to the last_search cita shape: cita_id, paciente_nombre, fecha, hora, duracion_min.
+  const mappedCitas = citas.map((c) => ({
+    cita_id: c.id,
+    paciente_nombre: c.pacientes?.nombre || c.patient_name_normalized || '(sin nombre)',
+    fecha: c.fecha,
+    hora: (c.hora || '').slice(0, 5),
+    duracion_min: c.duracion_min ?? 30,
+  }))
+
+  return {
+    citas: mappedCitas,
+    criteria: { zona, fecha_desde, fecha_hasta, hora_desde, hora_hasta },
+  }
 }
 
 // ─── Bulk reschedule preview tool ────────────────────────────────────────────
