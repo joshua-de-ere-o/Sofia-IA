@@ -249,7 +249,9 @@ function guayaquilParts() {
  * @returns {string} e.g. 'Mar 2 jun'
  */
 function formatDiaCorto(fecha) {
+  if (!fecha || typeof fecha !== 'string') return ''
   const [y, m, d] = fecha.split('-').map(Number)
+  if (!y || !m || !d) return fecha
   // Local constructor: no timezone shift — same weekday regardless of TZ offset
   const dt = new Date(y, m - 1, d)
   const DIAS = ['Dom', 'Lun', 'Mar', 'Mié', 'Jue', 'Vie', 'Sáb']
@@ -892,11 +894,21 @@ async function toolReagendarBulkPreview({ items }) {
     `${droppedNote}📋 Reagendamiento masivo — ${activeItems.length} cita${activeItems.length !== 1 ? 's' : ''}:`,
     '',
   ]
-  const itemLines = activeItems.map((item, idx) =>
-    `${idx + 1}. Cita ${item.cita_id} — ${item.fecha_original} ${item.hora_original} → ${item.nueva_fecha} ${item.nueva_hora}` +
-    (item.paciente_nombre ? ` (${item.paciente_nombre})` : '')
-  )
-  const footer = '\n¿Confirmás el reagendamiento de todas las citas?'
+  const itemLines = activeItems.map((item, idx) => {
+    const horaOrig = (item.hora_original || '').slice(0, 5)
+    const horaNueva = (item.nueva_hora || '').slice(0, 5)
+    // Show the destination day only when it differs from the original day,
+    // so a same-day move reads "Lun 1 jun 15:00 → 17:00" (hora-only change).
+    const origen = `${formatDiaCorto(item.fecha_original)} ${horaOrig}`
+    const destino = item.nueva_fecha !== item.fecha_original
+      ? `${formatDiaCorto(item.nueva_fecha)} ${horaNueva}`
+      : horaNueva
+    const nombre = item.paciente_nombre || 'Cita sin nombre'
+    return `${idx + 1}. ${nombre}\n   ${origen} → ${destino}`
+  })
+  const footer = activeItems.length === 1
+    ? '\n\n¿Confirmás el reagendamiento?'
+    : '\n\n¿Confirmás el reagendamiento de todas las citas?'
 
   const MAX_CHARS = 4096
   const header = headerLines.join('\n')
