@@ -771,3 +771,80 @@ describe('C-2i INSERT dedup — bloqueo and evento_personal: duplicate delivery 
     expect(citasInserts.length).toBeGreaterThan(0)
   })
 })
+
+// ─── C-2j: cancelar — already-cancelled cita reports "ya estaba", not false ✅ ──
+
+describe('C-2j resolveKellyPending(cancelar) — honest status on already-cancelled', () => {
+  it('reports "ya estaba cancelada" (not ✅ Aplicado) when the cita is already cancelled', async () => {
+    const pending = {
+      id: 'pending-cancel-1',
+      action_type: 'cancelar',
+      ejecutada: false,
+      expira_at: new Date(Date.now() + 3600_000).toISOString(),
+      args: { cita_id: 'cita-already-cancelled' },
+    }
+
+    mockFrom.mockImplementation((table) => {
+      if (table === 'pending_kelly_actions') return makeBuilder(table, [pending])
+      if (table === 'citas') {
+        // The .neq('estado','cancelada') UPDATE affects 0 rows (already cancelled);
+        // the follow-up SELECT (maybeSingle) returns the cita with estado cancelada.
+        return makeBuilder(table, [{ id: 'cita-already-cancelled', estado: 'cancelada' }], {
+          updateData: { data: [], error: null, count: 0 },
+        })
+      }
+      return makeBuilder(table, [])
+    })
+
+    const { POST } = await loadRoute()
+    await POST(makeRequest({
+      callback_query: {
+        id: 'cq-cancel-1',
+        data: 'kelly_confirm_pending-cancel-1',
+        message: { chat: { id: 999 }, message_id: 7 },
+      },
+    }))
+
+    const toast = JSON.parse(getCapturedFetches().filter((f) => f.url.includes('answerCallbackQuery'))[0].opts.body).text
+    expect(toast).toMatch(/ya estaba cancelada/i)
+    expect(toast).not.toMatch(/✅ Aplicado/i)
+
+    // ejecutada must NOT be flipped: nothing real happened.
+    const pendingUpdates = getUpdated()['pending_kelly_actions'] ?? []
+    const casFlip = pendingUpdates.find((u) => u.payload?.ejecutada === true)
+    expect(casFlip).toBeFalsy()
+  })
+
+  it('reports ✅ when the cita was active and gets cancelled (rows affected)', async () => {
+    const pending = {
+      id: 'pending-cancel-2',
+      action_type: 'cancelar',
+      ejecutada: false,
+      expira_at: new Date(Date.now() + 3600_000).toISOString(),
+      args: { cita_id: 'cita-active' },
+    }
+
+    mockFrom.mockImplementation((table) => {
+      if (table === 'pending_kelly_actions') return makeBuilder(table, [pending])
+      if (table === 'citas') {
+        // UPDATE affects 1 row (was active, now cancelled).
+        return makeBuilder(table, [{ id: 'cita-active' }], {
+          updateData: { data: [{ id: 'cita-active' }], error: null, count: 1 },
+        })
+      }
+      return makeBuilder(table, [])
+    })
+
+    const { POST } = await loadRoute()
+    await POST(makeRequest({
+      callback_query: {
+        id: 'cq-cancel-2',
+        data: 'kelly_confirm_pending-cancel-2',
+        message: { chat: { id: 999 }, message_id: 8 },
+      },
+    }))
+
+    const toast = JSON.parse(getCapturedFetches().filter((f) => f.url.includes('answerCallbackQuery'))[0].opts.body).text
+    expect(toast).toMatch(/✅/)
+  })
+})

@@ -1652,14 +1652,28 @@ async function resolveKellyPending(pendingId, confirmar) {
       }
     } else if (pending.action_type === 'cancelar') {
       const { cita_id } = pending.args;
+      // Only count rows that were NOT already cancelled: Postgres counts a matched
+      // row as affected even when the value doesn't change, so without .neq a
+      // re-cancel of an already-cancelled cita would report a false "✅ aplicado".
       const { data: updateData, error: e, count: updateCount } = await supabase
         .from('citas')
         .update({ estado: 'cancelada' })
         .eq('id', cita_id)
+        .neq('estado', 'cancelada')
         .select('id');
       if (e) throw e;
       const rowsAffected = updateCount ?? (updateData ? updateData.length : 0);
       if (rowsAffected === 0) {
+        // Either the cita doesn't exist, or it was already cancelled. Distinguish
+        // so the operator gets an honest message instead of a false success.
+        const { data: existing } = await supabase
+          .from('citas')
+          .select('id, estado')
+          .eq('id', cita_id)
+          .maybeSingle();
+        if (existing && existing.estado === 'cancelada') {
+          return { kind: 'result', status: 'already', message: 'ℹ️ La cita ya estaba cancelada.' };
+        }
         return { kind: 'result', status: 'failed', message: '⚠️ No se encontró la cita para cancelar.' };
       }
     } else {
