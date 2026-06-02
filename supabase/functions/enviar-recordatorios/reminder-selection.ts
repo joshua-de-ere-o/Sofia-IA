@@ -1,10 +1,13 @@
-// Ventana del recordatorio 24h: siempre POR ENCIMA de las 24h estrictas, para
-// que el botón "Cancelar cita" del template cumpla la política de cancelación
-// (mínimo 24h de anticipación). 30 min de ancho para que con un cron cada 10min
-// toda cita reciba el recordatorio (≥2 oportunidades).
+// Ventana del recordatorio 24h: se envía a ~25h de la cita, dejando ~1h de
+// buffer POR ENCIMA de las 24h estrictas. Así, cuando el paciente toca
+// "Cancelar cita" en el template, todavía cumple la política de cancelación
+// (mínimo 24h de anticipación) aunque tarde un rato en reaccionar. 30 min de
+// ancho para que con un cron cada 10min toda cita reciba el recordatorio
+// (≥2 oportunidades). El corte duro de `cancelar_cita` (< 24h) queda intacto:
+// el margen lo da el timing del envío, no una excepción en la política.
 const TWENTY_FOUR_HOUR_WINDOW_MS = {
-  min: 24 * 60 * 60 * 1000 + 10 * 60 * 1000,
-  max: 24 * 60 * 60 * 1000 + 40 * 60 * 1000,
+  min: 25 * 60 * 60 * 1000,
+  max: 25 * 60 * 60 * 1000 + 30 * 60 * 1000,
 };
 
 const TWO_HOUR_WINDOW_MS = {
