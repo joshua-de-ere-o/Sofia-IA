@@ -381,11 +381,15 @@ Deno.test("executeAgendarCita — persists the real service duration instead of 
   };
 
   const supabase = makeMockSupabase(state);
+  // Use taller_individual (60 min, zona sur) — a service whose catalog duration is NOT 30,
+  // so the test proves we persist the real catalog duration instead of a 30-min fallback.
+  // (Los planes de consulta pasaron a 30 min, que coincide con el default y no probaría nada.)
+  const args = { ...VALID_ARGS, servicio_id: "taller_individual", zona: "sur" };
   const result = JSON.parse(
-    await executeAgendarCita(VALID_ARGS, VALID_CONTEXT, supabase as any),
+    await executeAgendarCita(args, VALID_CONTEXT, supabase as any),
   );
 
   assertEquals(result.success, true, "Expected success: true");
   assertEquals(state.citasInserted.length, 1, "Expected exactly 1 cita insert");
-  assertEquals(state.citasInserted[0]!.duracion_min, 60, "Must persist the catalog duration for alimentario_mensual");
+  assertEquals(state.citasInserted[0]!.duracion_min, 60, "Must persist the catalog duration for taller_individual (60), not the 30-min fallback");
 });
