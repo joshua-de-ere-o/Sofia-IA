@@ -55,7 +55,7 @@
     "id": "virtual",
     "label": "Consulta Virtual",
     "precio": 20,
-    "duracion_min": 45,
+    "duracion_min": 30,
     "categoria": "alimentario",
     "agendable": true,
     "modalidades": ["virtual"],
