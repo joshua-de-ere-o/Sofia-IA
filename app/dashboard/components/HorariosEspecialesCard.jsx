@@ -8,6 +8,7 @@ import { Label } from '@/components/ui/label'
 import { Badge } from '@/components/ui/badge'
 import { CalendarRange, Plus, Trash2, ChevronDown, ChevronUp, AlertTriangle, Copy } from 'lucide-react'
 import { createClient } from '@/lib/supabase'
+import { todayGuayaquil } from '@/lib/date/guayaquil'
 import {
   listarExcepcionesProximas,
   crearExcepcionHorario,
@@ -43,7 +44,7 @@ function formatFecha(dateStr) {
 }
 
 function todayStr() {
-  return new Date().toISOString().split('T')[0]
+  return todayGuayaquil()
 }
 
 // ---------------------------------------------------------------------------

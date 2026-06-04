@@ -4,6 +4,7 @@ import React, { useState, useEffect } from 'react'
 import { Button } from '@/components/ui/button'
 import { Filter, List, CalendarRange } from 'lucide-react'
 import { cn } from '@/lib/utils'
+import { todayGuayaquil } from '@/lib/date/guayaquil'
 import { useCitas } from '../hooks/useCitas'
 import { CitasTable } from '../components/CitasTable'
 import { CitaCard } from '../components/CitaCard'
@@ -28,7 +29,7 @@ export function CitasAgendaView({
   handleImportCsv,
   openVoucher,
 }) {
-  const today = new Date().toISOString().split('T')[0]
+  const today = todayGuayaquil()
   const [estadoFiltro, setEstadoFiltro] = useState('todos')
   const [fechaFiltro, setFechaFiltro] = useState(today)
   const [vista, setVista] = useState('lista')

@@ -11,6 +11,7 @@ import {
   detectOverlaps,
 } from '@/lib/excepciones-logic'
 import { validateConversacionIds } from '@/lib/conversaciones-actions-logic'
+import { todayGuayaquil } from '@/lib/date/guayaquil'
 
 /**
  * Obtener la configuración general del sistema
@@ -575,8 +576,8 @@ export async function getFinanzasMetrics(periodo = 'mes') {
 export async function listarExcepcionesProximas() {
   const supabase = await createServerSupabaseClient()
 
-  const today = new Date().toISOString().split('T')[0]
-  const until = new Date(Date.now() + 90 * 24 * 60 * 60 * 1000).toISOString().split('T')[0]
+  const today = todayGuayaquil()
+  const until = todayGuayaquil(new Date(Date.now() + 90 * 24 * 60 * 60 * 1000))
 
   const { data, error } = await supabase
     .from('excepciones_horario')
