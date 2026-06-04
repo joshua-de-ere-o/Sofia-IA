@@ -8,6 +8,7 @@ import { appendForcedReminderHistory } from "./forced-reminder-history.ts";
 import { createLatencyTracker, getToolLatencyLabel, maskPhone, timeAsync } from "./latency.ts";
 import { matchesReminderKeyword } from "./reminder-routing.ts";
 import { decideAgentResponse } from "./agent-gate.ts";
+import { buildCitasActivasContext, CITAS_ACTIVAS_STATES } from "./citas-context.ts";
 import {
   executeConsultarDisponibilidad,
   executeCalcularPrecio,
@@ -229,6 +230,24 @@ export async function handleRequest(req: Request) {
       conv.paciente_id = pacienteExistente.id;
     }
 
+    // Citas activas del paciente — fuente de verdad inyectada cada turno. Evita
+    // que el LLM repita una cita cancelada/reagendada POR FUERA (dashboard,
+    // Telegram, SQL) que sigue viva en el historial del chat. Una sola consulta
+    // cubre todas las fuentes out-of-band en lugar de parchear cada mutación.
+    let citasActivas: any[] = [];
+    if (pacienteExistente?.id) {
+      await timeAsync(latency, 'preflight_citas_activas', async () => {
+        const { data } = await supabase
+          .from('citas')
+          .select('fecha, hora, servicio, modalidad, zona, estado')
+          .eq('paciente_id', pacienteExistente.id)
+          .in('estado', CITAS_ACTIVAS_STATES as unknown as string[])
+          .order('fecha', { ascending: true })
+          .order('hora', { ascending: true });
+        citasActivas = data ?? [];
+      });
+    }
+
     // ── Recordatorios keyword hook: deterministic pre-LLM intercept ─────────
     // Placed AFTER paciente lookup so we know whether the sender is a known patient.
     // When matched, we inject a synthetic forced tool call into the history BEFORE
@@ -259,6 +278,7 @@ export async function handleRequest(req: Request) {
     const pacienteCtx = pacienteExistente
       ? `\n\n[PACIENTE EXISTENTE]: nombre="${pacienteExistente.nombre}", fecha_nacimiento="${pacienteExistente.fecha_nacimiento ?? 'no registrada'}", zona_habitual="${pacienteExistente.zona ?? 'no registrada'}"`
       : `\n\n[PACIENTE NUEVO — no existe registro previo en el sistema]`;
+    const citasCtx = pacienteExistente ? buildCitasActivasContext(citasActivas) : "";
     const memoryContext = conv.historial_resumido ? `\n\n[ESTADO PREVIO DE LA CONVERSACIÓN]:\n${conv.historial_resumido}` : "";
 
     const datosBancarios = await timeAsync(latency, 'preflight_bank_config', async () => getDatosBancarios(supabase));
@@ -266,7 +286,7 @@ export async function handleRequest(req: Request) {
 
     const userMessage = {
       role: 'user',
-      content: `[CONTEXTO SISTEMA: Hora actual: ${nowGuayaquil}]${pacienteCtx}${memoryContext}${datosBancariosCtx}\n\n[MENSAJE DEL USUARIO]:\n${text}`
+      content: `[CONTEXTO SISTEMA: Hora actual: ${nowGuayaquil}]${pacienteCtx}${citasCtx}${memoryContext}${datosBancariosCtx}\n\n[MENSAJE DEL USUARIO]:\n${text}`
     };
 
     history.push(userMessage);
