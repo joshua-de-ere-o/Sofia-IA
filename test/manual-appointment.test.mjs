@@ -165,7 +165,7 @@ describe('createManualAppointmentRecord', () => {
       modalidad: 'presencial',
       zona: 'domicilio',
       motivo: 'Seguimiento mensual',
-      duracion_min: 60,
+      duracion_min: 30,
       monto_adelanto: 20,
       monto_total: 40,
     })
