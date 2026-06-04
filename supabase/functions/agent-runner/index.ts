@@ -8,7 +8,7 @@ import { appendForcedReminderHistory } from "./forced-reminder-history.ts";
 import { createLatencyTracker, getToolLatencyLabel, maskPhone, timeAsync } from "./latency.ts";
 import { matchesReminderKeyword } from "./reminder-routing.ts";
 import { decideAgentResponse } from "./agent-gate.ts";
-import { buildCitasActivasContext, CITAS_ACTIVAS_STATES } from "./citas-context.ts";
+import { buildCitasActivasContext, CITAS_ACTIVAS_STATES, todayGuayaquil } from "./citas-context.ts";
 import {
   executeConsultarDisponibilidad,
   executeCalcularPrecio,
@@ -236,12 +236,16 @@ export async function handleRequest(req: Request) {
     // cubre todas las fuentes out-of-band en lugar de parchear cada mutación.
     let citasActivas: any[] = [];
     if (pacienteExistente?.id) {
+      // Solo HOY en adelante (hora local Guayaquil): una cita pasada que quedó
+      // 'confirmada' sin cerrar NO debe anunciarse como vigente.
+      const hoyGuayaquil = todayGuayaquil();
       await timeAsync(latency, 'preflight_citas_activas', async () => {
         const { data } = await supabase
           .from('citas')
           .select('fecha, hora, servicio, modalidad, zona, estado')
           .eq('paciente_id', pacienteExistente.id)
           .in('estado', CITAS_ACTIVAS_STATES as unknown as string[])
+          .gte('fecha', hoyGuayaquil)
           .order('fecha', { ascending: true })
           .order('hora', { ascending: true });
         citasActivas = data ?? [];

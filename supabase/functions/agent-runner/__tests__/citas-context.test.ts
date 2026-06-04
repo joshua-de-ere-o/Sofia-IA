@@ -17,6 +17,7 @@ import {
 import {
   buildCitasActivasContext,
   CITAS_ACTIVAS_STATES,
+  todayGuayaquil,
 } from "../citas-context.ts";
 
 Deno.test("empty list → authoritative 'no active citas' block", () => {
@@ -72,4 +73,19 @@ Deno.test("active states are the three live appointment states", () => {
     "pendiente_pago",
     "confirmada_provisional",
   ]);
+});
+
+Deno.test("todayGuayaquil — daytime in Ecuador returns same UTC day", () => {
+  // 2026-06-04 15:00 UTC === 2026-06-04 10:00 in Guayaquil
+  assertEquals(todayGuayaquil(new Date("2026-06-04T15:00:00Z")), "2026-06-04");
+});
+
+Deno.test("todayGuayaquil — late night in Ecuador still returns today", () => {
+  // 2026-06-05 02:00 UTC === 2026-06-04 21:00 in Guayaquil (toISOString would say 06-05)
+  assertEquals(todayGuayaquil(new Date("2026-06-05T02:00:00Z")), "2026-06-04");
+});
+
+Deno.test("todayGuayaquil — rolls over only when Guayaquil crosses midnight", () => {
+  // 2026-06-05 05:00 UTC === 2026-06-05 00:00 in Guayaquil
+  assertEquals(todayGuayaquil(new Date("2026-06-05T05:00:00Z")), "2026-06-05");
 });

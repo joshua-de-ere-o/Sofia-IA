@@ -18,6 +18,22 @@ export const CITAS_ACTIVAS_STATES = [
   "confirmada_provisional",
 ] as const;
 
+/**
+ * Current local date in Guayaquil (Ecuador, UTC-5) as 'YYYY-MM-DD'.
+ *
+ * Used to filter the active-appointments query to today-and-future, so a past
+ * cita that was never closed (still 'confirmada') is NOT announced as current.
+ * `en-CA` yields 'YYYY-MM-DD' directly, matching `citas.fecha`. Same approach as
+ * `toGuayaquilParts` in enviar-recordatorios and the dashboard helper.
+ *
+ * @param now Injectable clock for tests.
+ */
+export function todayGuayaquil(now: Date = new Date()): string {
+  return new Intl.DateTimeFormat("en-CA", {
+    timeZone: "America/Guayaquil",
+  }).format(now);
+}
+
 export interface CitaActiva {
   fecha: string;
   hora: string;
