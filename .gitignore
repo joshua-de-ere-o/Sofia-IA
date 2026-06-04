@@ -19,6 +19,8 @@
 # misc
 .DS_Store
 *.pem
+__pycache__/
+*.py[cod]
 
 # debug
 npm-debug.log*
@@ -49,5 +51,6 @@ next-env.d.ts
 inventario-sistema-v1.md
 plan-correcciones-mayo.md
 files.json
+Telegram - admin.txt
 
 .vercel
