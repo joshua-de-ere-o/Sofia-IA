@@ -846,3 +846,36 @@ export const TOOLS = [
     },
   },
 ];
+
+// ─── Operator (Dra. Kely / staff) self-service redirect ───────────────────────
+// When a WhatsApp message arrives from a known operator number, Sofía must NOT
+// treat it as a patient. Instead she replies pointing to the panel / Telegram bot,
+// where scheduling captures the patient's real number. Operator numbers live in
+// the env var OPERATOR_WHATSAPP_NUMBERS (comma-separated E.164) and are NOT
+// hardcoded on purpose — this repository is public.
+
+export const PANEL_URL = "https://sofia-ia-omega.vercel.app";
+export const TELEGRAM_BOT_HANDLE = "@Sofia_asistenteKely_bot";
+
+/** Operator WhatsApp numbers from env OPERATOR_WHATSAPP_NUMBERS (comma-separated E.164). */
+export function getOperatorWhatsappNumbers(): string[] {
+  return (Deno.env.get("OPERATOR_WHATSAPP_NUMBERS") ?? "")
+    .split(",")
+    .map((n) => n.trim())
+    .filter((n) => n.length > 0);
+}
+
+/** True when `senderNumber` belongs to an operator (Dra. Kely / staff). */
+export function isOperatorWhatsappNumber(senderNumber: string): boolean {
+  return getOperatorWhatsappNumbers().includes(senderNumber);
+}
+
+/** Message Sofía sends to an operator who writes to the patient line. */
+export function operatorRedirectMessage(): string {
+  return (
+    "Hola Dra 👋 Esta línea es para tus pacientes. Para agendar una cita, usá:\n\n" +
+    `🖥️ El panel: ${PANEL_URL}\n` +
+    `💬 O el bot de Telegram: ${TELEGRAM_BOT_HANDLE}\n\n` +
+    "Así la cita queda con el número del paciente y el recordatorio le llega a quien tiene que llegar. 🙌"
+  );
+}

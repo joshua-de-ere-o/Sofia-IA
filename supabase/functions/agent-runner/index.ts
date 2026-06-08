@@ -2,7 +2,7 @@ import "jsr:@supabase/functions-js/edge-runtime.d.ts";
 import { createClient } from "jsr:@supabase/supabase-js";
 
 // Imports locales (dentro del mismo directorio — Deno los resuelve correctamente)
-import { SYSTEM_PROMPT, TOOLS, MODEL_CONFIG } from "./config.ts";
+import { SYSTEM_PROMPT, TOOLS, MODEL_CONFIG, isOperatorWhatsappNumber, operatorRedirectMessage } from "./config.ts";
 import { getModelAdapter } from "./model-adapter.ts";
 import { appendForcedReminderHistory } from "./forced-reminder-history.ts";
 import { createLatencyTracker, getToolLatencyLabel, maskPhone, timeAsync } from "./latency.ts";
@@ -157,6 +157,20 @@ export async function handleRequest(req: Request) {
 
     if (!senderNumber || !text) {
       return new Response("Bad Request: missing senderNumber or text", { status: 400 });
+    }
+
+    // ── Operator branch: a message from a known operator (Dra. Kely / staff)
+    // number must NOT be treated as a patient. Reply with self-service guidance
+    // (panel + Telegram bot) and return before any image/conversation/patient/agent
+    // logic. This prevents the operator's own number from being saved as a patient
+    // or entering the payment flow. Numbers come from OPERATOR_WHATSAPP_NUMBERS.
+    if (isOperatorWhatsappNumber(senderNumber)) {
+      console.log(`[Agent-Runner] operator number ${maskPhone(senderNumber)} — self-service redirect`);
+      await sendWhatsAppResponse(senderNumber, operatorRedirectMessage());
+      return new Response(
+        JSON.stringify({ status: "operator_redirect" }),
+        { status: 200, headers: corsHeaders },
+      );
     }
 
     // ── Image branch: route to payment flow before any LLM logic ──────────────
