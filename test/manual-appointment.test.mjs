@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 
-import { createManualAppointmentRecord, getManualAppointmentFormOptions, normalizeManualAppointmentPayload } from '@/lib/manual-appointment.js'
+import { createManualAppointmentRecord, getManualAppointmentFormOptions, normalizeEcuadorPhone, normalizeManualAppointmentPayload, validateManualAppointmentPayload } from '@/lib/manual-appointment.js'
 import { runCreateManualAppointmentFlow, runImportAppointmentsFlow } from '@/app/dashboard/hooks/useCitas'
 
 function makeMockSupabase({ existingPatient = null, slotConflicts = [], insertedCitaId = 'cita-1' } = {}) {
@@ -100,11 +100,27 @@ const VALID_INPUT = {
   motivo: ' Seguimiento mensual ',
 }
 
+describe('normalizeEcuadorPhone', () => {
+  it('converts local formats to E.164 (+593) so reminders can be delivered', () => {
+    expect(normalizeEcuadorPhone('0983480029')).toBe('+593983480029')
+    expect(normalizeEcuadorPhone(' 098 348 0029 ')).toBe('+593983480029')
+    expect(normalizeEcuadorPhone('983480029')).toBe('+593983480029')
+    expect(normalizeEcuadorPhone('593983480029')).toBe('+593983480029')
+    expect(normalizeEcuadorPhone('+593983480029')).toBe('+593983480029')
+  })
+
+  it('returns an empty string for empty input', () => {
+    expect(normalizeEcuadorPhone('')).toBe('')
+    expect(normalizeEcuadorPhone(null)).toBe('')
+    expect(normalizeEcuadorPhone(undefined)).toBe('')
+  })
+})
+
 describe('normalizeManualAppointmentPayload', () => {
-  it('trims patient and appointment fields before submit', () => {
+  it('trims fields and normalizes the phone to E.164 before submit', () => {
     expect(normalizeManualAppointmentPayload(VALID_INPUT)).toEqual({
       patientName: 'Ana Torres',
-      patientPhone: '0999999999',
+      patientPhone: '+593999999999',
       patientBirthDate: '1990-03-15',
       service: 'alimentario_exclusivo',
       date: '2026-06-10',
@@ -120,6 +136,21 @@ describe('normalizeManualAppointmentPayload', () => {
     const result = normalizeManualAppointmentPayload({ ...VALID_INPUT, estado: 'pendiente_pago' })
 
     expect(result.estado).toBe('pendiente_pago')
+  })
+})
+
+describe('validateManualAppointmentPayload', () => {
+  it('accepts a local phone and normalizes it to E.164', () => {
+    const result = validateManualAppointmentPayload({ ...VALID_INPUT, patientPhone: '0983480029' })
+
+    expect(result.error).toBeUndefined()
+    expect(result.input.patientPhone).toBe('+593983480029')
+  })
+
+  it('rejects a phone that is not a valid Ecuadorian mobile', () => {
+    const result = validateManualAppointmentPayload({ ...VALID_INPUT, patientPhone: '12345' })
+
+    expect(result.error).toMatch(/celular de Ecuador/)
   })
 })
 
@@ -153,7 +184,7 @@ describe('createManualAppointmentRecord', () => {
     expect(supabase.state.patientsInserted).toHaveLength(1)
     expect(supabase.state.patientsInserted[0]).toMatchObject({
       nombre: 'Ana Torres',
-      telefono: '0999999999',
+      telefono: '+593999999999',
       zona: 'domicilio',
     })
     expect(supabase.state.citasInserted[0]).toMatchObject({
@@ -173,7 +204,7 @@ describe('createManualAppointmentRecord', () => {
 
   it('reuses the existing patient for the same phone instead of inserting a duplicate', async () => {
     const supabase = makeMockSupabase({
-      existingPatient: { id: 'paciente-existente-1', nombre: 'Ana', telefono: '0999999999', zona: 'sur' },
+      existingPatient: { id: 'paciente-existente-1', nombre: 'Ana', telefono: '+593999999999', zona: 'sur' },
     })
 
     const result = await createManualAppointmentRecord(supabase, {

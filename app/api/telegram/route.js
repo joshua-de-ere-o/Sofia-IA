@@ -22,6 +22,12 @@ import {
   timeToMinutes,
   addMinutesToTime,
 } from '../../../lib/availability/slot-generator.js';
+import {
+  createManualAppointmentRecord,
+  validateManualAppointmentPayload,
+} from '../../../lib/manual-appointment.js';
+import { getServicio } from '../../../lib/servicios.js';
+import { ZONAS_CATALOG } from '../../../lib/catalog/index.js';
 
 const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL || '';
 const supabaseServiceKey = process.env.SUPABASE_SERVICE_ROLE_KEY || '';
@@ -210,6 +216,8 @@ Tools disponibles:
 - cancelar_cita_kelly { "nombre_paciente": str, "fecha"?: "YYYY-MM-DD" }
 - crear_bloqueo_agenda { "fecha": "YYYY-MM-DD", "hora": "HH:MM", "duracion_min": int, "motivo": str }
 - agendar_evento_personal { "motivo": str, "fecha": "YYYY-MM-DD", "hora": "HH:MM", "duracion_min"?: int, "recordar_min_antes"?: int }
+- agendar_cita_paciente { "nombre": str, "telefono": str, "fecha_nacimiento": "YYYY-MM-DD", "servicio": str, "zona": "sur|norte|virtual|valle|domicilio|santo_domingo", "fecha": "YYYY-MM-DD", "hora": "HH:MM", "modalidad"?: "presencial|virtual", "motivo"?: str }
+  // Agenda una cita de PACIENTE (no de Kely). El telefono puede venir en formato local (ej. 0983480029): el sistema lo normaliza a +593 solo. Si falta nombre, telefono, fecha_nacimiento, servicio, zona, fecha u hora, pedila con responder_texto antes de agendar. La cita se crea como confirmada. Crea un preview con boton de confirmacion: no agenda nada de inmediato.
 - buscar_citas_bulk { "fecha_desde": "YYYY-MM-DD", "fecha_hasta": "YYYY-MM-DD", "zona"?: "sur|norte|virtual|valle|domicilio|santo_domingo", "estado"?: [str], "hora_desde"?: "HH:MM", "hora_hasta"?: "HH:MM" }
   // Busca citas activas en un rango de fechas, con zona opcional. Úsala antes de proponer reagendamientos masivos. No crea ni modifica datos. hora_desde y hora_hasta (formato HH:MM 24h) son opcionales pero deben usarse siempre juntos — si solo das uno, se devuelve error.
 - reagendar_bulk { "items": [ { "cita_id": str, "paciente_nombre"?: str, "fecha_original": "YYYY-MM-DD", "hora_original": "HH:MM", "nueva_fecha": "YYYY-MM-DD", "nueva_hora": "HH:MM", "duracion_min": int } ] }
@@ -225,7 +233,8 @@ Reglas:
 - Si falta info para una destructiva (ej. duracion_min en bloqueo, hora exacta), usa responder_texto con la pregunta.
 - Si la intención no encaja, usa crear_tarea y avisa con responder_texto que lo guardas como recordatorio.
 - crear_bloqueo_agenda: bloqueo simple de tiempo SIN recordatorio. duracion_min es OBLIGATORIO; si Kely no la dijo, preguntá con responder_texto.
-- agendar_evento_personal: para un evento PROPIO de Kely en su agenda (ej. "agendá mi visita al odontólogo a las 15:00", "anotame reunión el viernes 10am"). Bloquea su agenda a esa hora Y le programa un recordatorio. Si NO dice duración, asumí 60 min (no preguntes). Si NO dice con cuánta anticipación avisar, asumí 30 min antes (no preguntes). Si pide "sin recordatorio", pasá recordar_min_antes: 0.`;
+- agendar_evento_personal: para un evento PROPIO de Kely en su agenda (ej. "agendá mi visita al odontólogo a las 15:00", "anotame reunión el viernes 10am"). Bloquea su agenda a esa hora Y le programa un recordatorio. Si NO dice duración, asumí 60 min (no preguntes). Si NO dice con cuánta anticipación avisar, asumí 30 min antes (no preguntes). Si pide "sin recordatorio", pasá recordar_min_antes: 0.
+- agendar_cita_paciente: para agendar a un PACIENTE cuando Kely te pasa los datos del paciente (nombre + teléfono + fecha de nacimiento + cuándo). Es DISTINTO de agendar_evento_personal (ese es para Kely misma). El recordatorio le llega al paciente, así que el teléfono es del paciente, no de Kely. Si Kely no aclara el servicio o la zona, preguntá con responder_texto antes de agendar (sin eso no se puede calcular ni agendar).`;
 
 function guayaquilParts() {
   const now = new Date();
@@ -377,6 +386,7 @@ async function handleKellyMessage(text) {
       case 'cancelar_cita_kelly':     toolResult = await toolCancelarCita(args); break;
       case 'crear_bloqueo_agenda':    toolResult = await toolCrearBloqueo(args); break;
       case 'agendar_evento_personal': toolResult = await toolAgendarEventoPersonal(args, operatorPolicy); break;
+      case 'agendar_cita_paciente':   toolResult = await toolAgendarCitaPaciente(args); break;
       case 'crear_tarea':             await toolCrearTarea(args); break;
       case 'responder_texto':         await sendToKely(args.texto || '…'); break;
       default:
@@ -1160,6 +1170,80 @@ async function toolAgendarEventoPersonal(rawArgs, policy) {
   };
 }
 
+// Agenda una cita de paciente desde Telegram. Reutiliza la validación/normalización
+// del flujo manual del panel (lib/manual-appointment.js): normaliza el teléfono a
+// +593, valida servicio/zona/modalidad y deja la cita en 'confirmada' (Kely agenda
+// directo). Solo crea el preview; la creación real ocurre al confirmar (INSERT no
+// idempotente → CAS-first en el confirm path).
+async function toolAgendarCitaPaciente(args) {
+  const { nombre, telefono, fecha_nacimiento, servicio, zona, fecha, hora, modalidad, motivo } = args || {};
+
+  const faltan = [];
+  if (!nombre) faltan.push('nombre');
+  if (!telefono) faltan.push('teléfono');
+  if (!fecha_nacimiento) faltan.push('fecha de nacimiento');
+  if (!servicio) faltan.push('servicio');
+  if (!zona) faltan.push('zona');
+  if (!fecha) faltan.push('fecha');
+  if (!hora) faltan.push('hora');
+  if (faltan.length > 0) {
+    return sendToKely(`⚠️ Para agendar al paciente me falta: ${faltan.join(', ')}.`);
+  }
+
+  const payload = {
+    patientName: nombre,
+    patientPhone: telefono,
+    patientBirthDate: fecha_nacimiento,
+    service: servicio,
+    date: fecha,
+    time: hora,
+    // Si no se especifica modalidad, la zona virtual implica virtual; el resto presencial.
+    modalidad: modalidad || (zona === 'virtual' ? 'virtual' : 'presencial'),
+    zona,
+    estado: 'confirmada',
+    motivo: motivo || 'Agendado por la doctora',
+  };
+
+  // Validate early so Kely sees a clear error (bad phone, zona/servicio mismatch)
+  // BEFORE a pending action is created.
+  const validation = validateManualAppointmentPayload(payload);
+  if (validation.error) {
+    return sendToKely(`⚠️ ${validation.error}`);
+  }
+  const { input, service } = validation;
+
+  const { data: pending, error } = await supabase
+    .from('pending_kelly_actions')
+    .insert({ action_type: 'agendar_cita_paciente', args: input })
+    .select('id')
+    .single();
+  if (error) throw error;
+
+  const zonaLabel = ZONAS_CATALOG.find((z) => z.id === input.zona)?.label || input.zona;
+  const summary = [
+    `🗓️ Agendar paciente:`,
+    `Paciente: ${input.patientName}`,
+    `Tel: ${input.patientPhone}`,
+    `Nac.: ${input.patientBirthDate}`,
+    `Servicio: ${service.label}`,
+    `${input.date} ${input.time} — ${zonaLabel} (${input.modalidad})`,
+  ].join('\n');
+
+  /** @type {OperatorPreview} */
+  return {
+    kind: 'preview',
+    actionType: 'agendar_cita_paciente',
+    previewId: pending.id,
+    summary,
+    keyboard: [
+      [
+        { text: '✅ Sí, agendar', callback_data: `kelly_confirm_${pending.id}` },
+        { text: '❌ No', callback_data: `kelly_cancel_${pending.id}` },
+      ],
+    ],
+  };
+}
+
 async function toolCrearTarea({ descripcion, fecha_hora_iso }) {
   if (!descripcion || !fecha_hora_iso) {
     return sendToKely('⚠️ Necesito descripción y fecha/hora.');
@@ -1514,7 +1598,11 @@ async function resolveKellyPending(pendingId, confirmar) {
   //     idempotent — running them twice creates duplicate rows in citas/tareas.
 
   // ── INSERT actions: CAS-first ─────────────────────────────────────────────────
-  if (pending.action_type === 'bloqueo' || pending.action_type === 'evento_personal') {
+  if (
+    pending.action_type === 'bloqueo' ||
+    pending.action_type === 'evento_personal' ||
+    pending.action_type === 'agendar_cita_paciente'
+  ) {
     const { count: insertCasCount, error: insertCasError } = await supabase
       .from('pending_kelly_actions')
       .update({ ejecutada: true, ejecutada_at: new Date().toISOString() })
@@ -1538,6 +1626,16 @@ async function resolveKellyPending(pendingId, confirmar) {
           .from('citas')
           .insert(buildBloqueoRow({ fecha, hora, duracion_min, motivo }));
         if (e) throw e;
+      } else if (pending.action_type === 'agendar_cita_paciente') {
+        // Re-validates and creates patient + cita exactly once (CAS already won).
+        const res = await createManualAppointmentRecord(supabase, pending.args);
+        if (res?.error) {
+          // The CAS lock is already flipped. A logical error here (e.g. the slot was
+          // taken between preview and confirm) is reported as-is; Kely re-issues the
+          // command with a new time rather than re-tapping a now-locked preview.
+          return { kind: 'result', status: 'failed', message: `⚠️ ${res.error}` };
+        }
+        return { kind: 'result', status: 'applied', message: '✅ Cita agendada.' };
       } else {
         // evento_personal
         const { fecha, hora, duracion_min, motivo, recordar_min_antes } = pending.args;
