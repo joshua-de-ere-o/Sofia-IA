@@ -15,7 +15,7 @@
   },
   {
     "id": "valle",
-    "label": "Valle (Los Chillos)",
+    "label": "Valle (Los Chillos, a domicilio)",
     "tier": "presencial",
     "surcharge": 5,
     "requires_advance": true
