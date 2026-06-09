@@ -97,7 +97,6 @@ Talleres de nutrición para empresas y grupos corporativos. Cotización según c
 | Sur | Sin adelanto |
 | Norte | 50% del plan |
 | Virtual | 50% del plan |
-| Valle (Los Chillos) | 50% del plan + $5 de recargo |
 | Domicilio | $20 fijo |
 
 *Nota: la columna "Adelanto" de los servicios indica si el servicio requiere adelanto. El monto y condición por zona se aplica sobre esa base.*

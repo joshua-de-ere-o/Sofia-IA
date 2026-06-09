@@ -447,7 +447,7 @@ export async function handleRequest(req: Request) {
   "paciente_nombre": string|null,
   "paciente_es_existente": boolean,
   "modalidad_elegida": "presencial"|"virtual"|null,
-  "zona_elegida": "sur"|"norte"|"valle"|"virtual"|"domicilio"|null,
+  "zona_elegida": "sur"|"norte"|"virtual"|"domicilio"|null,
   "plan_tentativo": string|null,
   "motivo_consulta": string|null,
   "fecha_hora_tentativa": string|null,

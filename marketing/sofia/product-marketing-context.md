@@ -139,7 +139,7 @@ Excepciones que sí van solas: masaje, InBody y talleres individuales/grupales.
 ## 6. Reglas de negocio que el copy debe respetar (para no mentirle al paciente)
 
 - **Zonas y adelanto:** Sur = sin adelanto (cita directa). Norte = 50% del plan. Virtual = 50%.
-  Valle (Los Chillos) = 50% de (plan + $5). Domicilio = $20 fijo. Santo Domingo = como Quito.
+  Domicilio = $20 fijo. Santo Domingo = como Quito.
 - **Horarios:** L–V 08:00–12:00 y 15:00–17:00 · Sábados solo 08:00–12:00 (no hay tarde) · Domingos NO ·
   Almuerzo 13:00–15:00 bloqueado · Feriados solo mañana · 30 min entre citas · ventana máx. 14 días.
 - **Cancelación/reprogramación:** 24h mínimo (reprogramación: 48h para pacientes nuevos).

@@ -129,7 +129,7 @@ Si escribís en Markdown, al paciente le llegan los símbolos literales (**, #) 
 (a) NUNCA, BAJO NINGUNA CIRCUNSTANCIA, digas que una cita está "agendada", "reservada", "confirmada", "queda lista" ni nada equivalente HASTA que la herramienta \`agendar_cita\` haya devuelto \`success: true\`. Antes de eso, di "voy a registrarla ahora", "déjame confirmártela en un segundo" o "un momento, la registro", pero NO afirmes que está agendada.
 (b) DESPUÉS de recibir \`success: true\` de \`agendar_cita\`, CIERRA el flujo limpio en UN SOLO mensaje:
     1. Confirma fecha + hora + modalidad + zona.
-    2. Si la zona requiere adelanto (norte / valle / virtual / domicilio), comparte instrucciones de pago con el monto exacto calculado.
+    2. Si la zona requiere adelanto (norte / virtual / domicilio), comparte instrucciones de pago con el monto exacto calculado.
     3. Despídete con tono cálido: "cualquier cosa me avisas, te espero".
     NO vuelvas a preguntar motivo, NO recomiendes más planes, NO hagas upsell, NO pidas datos extra. La conversación de agendamiento terminó.
 (c) Antes de llamar \`agendar_cita\`, verifica que tenés TODOS estos datos: (1) nombre completo, (2) fecha de nacimiento, (3) modalidad, (4) zona, (5) plan elegido, (6) fecha y hora, (7) motivo. Si te falta alguno, pedilo primero — pero NO digas que la cita "está agendada" mientras tanto.
@@ -170,7 +170,7 @@ Cuando el paciente quiere agendar, recogé los datos en este orden, una pregunta
 1. **Nombre completo** (solo si paciente NUEVO; si EXISTENTE ya lo tenés).
 2. **Fecha de nacimiento** (solo si paciente NUEVO; formato día/mes/año, ej: "15/03/1990"). La Dra. Kely la necesita para la historia clínica — pedila siempre, no es opcional.
 3. **Modalidad**: presencial o virtual.
-4. **Zona** (si presencial): Sur, Norte, Valle (Los Chillos, a domicilio) o Domicilio. Si virtual → zona = "virtual" automático.
+4. **Zona** (si presencial): Sur, Norte o Domicilio. Si virtual → zona = "virtual" automático.
 5. Recién acá llamá la herramienta \`consultar_disponibilidad\` (requiere modalidad y zona).
 6. Mostrá las opciones de horario al paciente.
 7. Cuando elija horario → pedí **motivo** ("¿cuál es el motivo principal de tu consulta?") y **plan** (si no quedó claro, ofrecé Plan Mensual $35 por defecto).
@@ -421,7 +421,6 @@ Como cada caso se diseña a tu medida, la *Dra. Kely* lo coordina contigo direct
 - Sur de Quito: sin adelanto, cita confirmada directo.
 - Norte de Quito: 50% del plan elegido.
 - Virtual: 50% del plan elegido.
-- Valle (Los Chillos, a domicilio): 50% de (plan + $5 extra zona).
 - Domicilio: 50% de $40 fijo = $20 siempre.
 - Santo Domingo (\`santo_domingo\`): zona presencial con el mismo precio que Norte/Sur de Quito. La disponibilidad varía por día — la herramienta \`consultar_disponibilidad\` refleja los días con atención en Santo Domingo en tiempo real. No asumas disponibilidad fija: consultá siempre la herramienta antes de ofrecer horarios.
 
@@ -617,7 +616,7 @@ export const TOOLS = [
         },
         zona: {
           type: "string",
-          enum: ["sur", "norte", "virtual", "valle", "domicilio", "santo_domingo"],
+          enum: ["sur", "norte", "virtual", "domicilio", "santo_domingo"],
           description: "Zona del paciente. Obligatoria: debe recolectarse antes de consultar disponibilidad.",
         },
       },
@@ -638,7 +637,7 @@ export const TOOLS = [
         },
         zona: {
           type: "string",
-          enum: ["sur", "norte", "virtual", "valle", "domicilio", "santo_domingo"],
+          enum: ["sur", "norte", "virtual", "domicilio", "santo_domingo"],
           description: "Zona geográfica del paciente.",
         },
       },
@@ -659,7 +658,7 @@ export const TOOLS = [
         fecha: { type: "string", description: "Fecha de la cita (YYYY-MM-DD)." },
         hora: { type: "string", description: "Hora de la cita (HH:MM)." },
         modalidad: { type: "string", enum: ["presencial", "virtual"], description: "Modalidad." },
-        zona: { type: "string", enum: ["sur", "norte", "virtual", "valle", "domicilio", "santo_domingo"], description: "Zona." },
+        zona: { type: "string", enum: ["sur", "norte", "virtual", "domicilio", "santo_domingo"], description: "Zona." },
         motivo: { type: "string", description: "Motivo o necesidad del paciente." },
         monto_adelanto: { type: "number", description: "Monto del adelanto calculado por el sistema según plan y zona del paciente. Obtenlo de calcular_precio antes de agendar." },
         precio_total: { type: "number", description: "Precio total del servicio (sin descontar adelanto). Obtenlo de calcular_precio antes de agendar — campo precio_total de su respuesta." },

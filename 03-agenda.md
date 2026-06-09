@@ -57,7 +57,7 @@ Cargar feriados del año actual al iniciar. Actualizar anualmente.
 | estado | text | `agenda_bloqueada`, `pendiente_pago`, `confirmada`, `completada`, `cancelada`, `no_show` |
 | motivo_bloqueo | text | NULL para citas de paciente; texto libre para bloqueos de agenda (ej. "Reunión Dr. Molina") |
 | modalidad | text | `presencial`, `virtual` |
-| zona | text | `sur`, `norte`, `virtual`, `valle`, `domicilio` |
+| zona | text | `sur`, `norte`, `virtual`, `domicilio` (+ `valle` legado: ya no se ofrece, persiste solo en citas históricas) |
 | payment_method | text | `transfer`, `cash`, `payphone` (nullable) |
 | payment_reference | text | ID de imagen o transacción (nullable) |
 | external_calendar_id | text | Nullable — preparado para Google Calendar V2 |

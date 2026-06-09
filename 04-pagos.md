@@ -20,7 +20,6 @@
 | `sur` | No | $0 — cita confirmada directo |
 | `norte` | 50% | `plan_precio * 0.5` |
 | `virtual` | 50% | `plan_precio * 0.5` |
-| `valle` | 50% | `(plan_precio + 5) * 0.5` |
 | `domicilio` | 50% | `40 * 0.5 = 20` (fijo, independiente del plan) |
 
 ### Ejemplos
@@ -30,7 +29,6 @@
 | Sur | $0 | $0 |
 | Norte | $17.50 | $35 |
 | Virtual | $17.50 | $35 |
-| Valle | $20 | $37.50 |
 | Domicilio | $20 | $20 |
 
 ## Herramienta `calcular_precio`
@@ -39,7 +37,7 @@
 ```json
 {
   "servicio_id": "mensual",
-  "zona": "valle"
+  "zona": "norte"
 }
 ```
 
@@ -47,19 +45,20 @@
 ```json
 {
   "precio_base": 35,
-  "ajuste_zona": 5,
-  "precio_total": 40,
+  "ajuste_zona": 0,
+  "precio_total": 35,
   "requiere_adelanto": true,
-  "monto_adelanto": 20
+  "monto_adelanto": 17.5
 }
 ```
 
 **Lógica:**
 1. Buscar precio base del servicio.
-2. Si zona = `valle` → sumar $5.
-3. Si zona = `domicilio` → precio_total = $40 fijo (ignora plan).
-4. Si zona = `sur` → requiere_adelanto = false, monto_adelanto = 0.
-5. Si no → monto_adelanto = precio_total * 0.5.
+2. Si zona = `domicilio` → precio_total = $40 fijo (ignora plan).
+3. Si zona = `sur` → requiere_adelanto = false, monto_adelanto = 0.
+4. Si no → monto_adelanto = precio_total * 0.5.
+
+> Nota: la zona `valle` (Los Chillos, a domicilio) ya **no se ofrece**. El motor todavía conserva su regla (`+$5`) como legado para citas históricas, pero Sofía no la propone ni la agenda.
 
 ## Métodos de Pago
 

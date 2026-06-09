@@ -46,7 +46,7 @@ Una pregunta a la vez, en este orden (la fuente de verdad es [supabase/functions
 1. **Nombre completo** — solo si paciente NUEVO; si EXISTENTE viene en el tag del sistema.
 2. **Fecha de nacimiento** — obligatoria para la historia clínica de la Dra. Kely. Solo si paciente NUEVO o si el tag dice `fecha_nacimiento="no registrada"`. Sofía convierte al formato YYYY-MM-DD antes de llamar `agendar_cita`.
 3. **Modalidad** — presencial / virtual.
-4. **Zona** — sur / norte / valle / domicilio (si virtual → zona = "virtual" automático).
+4. **Zona** — sur / norte / domicilio (si virtual → zona = "virtual" automático).
 5. → `consultar_disponibilidad`
 6. Mostrar opciones de horario.
 7. Cuando elige → pedir **motivo** y **plan** (default Plan Mensual $35).

@@ -95,12 +95,16 @@ describe('SYSTEM_PROMPT — REGLA DE ORO and zones still present', () => {
     expect(prompt).toContain('REGLA DE ORO')
   })
 
-  it('mentions the 5 valid zones', () => {
+  it('mentions the valid zones', () => {
     expect(prompt).toContain('sur')
     expect(prompt).toContain('norte')
-    expect(prompt).toContain('valle')
     expect(prompt).toContain('virtual')
     expect(prompt).toContain('domicilio')
+  })
+
+  it('no longer offers the Valle (a domicilio) zone', () => {
+    expect(prompt).not.toContain('valle')
+    expect(prompt).not.toContain('Valle')
   })
 
   it('shows the reminders option in the new-patient menu', () => {
