@@ -127,8 +127,8 @@ describe('SYSTEM_PROMPT — patient lane stays strict (policy boundary)', () => 
   })
 
   it('patient prompt enforces mandatory data collection order', () => {
-    // Strict data order: name → dob → modality → zone → ...
-    expect(prompt).toContain('ORDEN ESTRICTO DE RECOLECCIÓN')
+    // Availability-first booking order section (renamed from 'ORDEN ESTRICTO DE RECOLECCIÓN')
+    expect(prompt).toContain('ORDEN DE AGENDAMIENTO')
   })
 
   it('patient prompt does NOT contain operator-only override language', () => {
@@ -157,8 +157,8 @@ describe('Telegram route — operator lane is tagged and isolated', () => {
   })
 
   it('KELLY_SYSTEM_PROMPT does NOT contain the patient strict ordering phrase', () => {
-    // The strict patient ordering must never bleed into the operator prompt
-    expect(telegramRoute).not.toContain('ORDEN ESTRICTO DE RECOLECCIÓN')
+    // The availability-first booking order must never bleed into the operator prompt
+    expect(telegramRoute).not.toContain('ORDEN DE AGENDAMIENTO')
   })
 
   it('patient SYSTEM_PROMPT and KELLY_SYSTEM_PROMPT are defined in separate files', () => {
