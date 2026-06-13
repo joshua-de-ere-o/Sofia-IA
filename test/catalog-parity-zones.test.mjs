@@ -30,7 +30,7 @@ const CONFIG_PATH = resolve(__dirname, '../supabase/functions/agent-runner/confi
 
 /**
  * Parse the zona enum array from the consultar_disponibilidad tool schema.
- * Looks for: enum: ["sur", "norte", "virtual", "valle", "domicilio", ...]
+ * Looks for: enum: ["sur", "norte", "virtual", "domicilio", ...]
  * inside the consultar_disponibilidad block in config.ts.
  */
 function extractZonasFromConfigTs() {
