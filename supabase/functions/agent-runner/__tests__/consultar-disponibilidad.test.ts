@@ -109,6 +109,7 @@ Deno.test("returns slots given only fecha_inicio/fecha_fin (no modalidad, no zon
   const supabase = makeMockSupabase(state);
   const raw = await executeConsultarDisponibilidad(
     { fecha_inicio: FECHA_INICIO, fecha_fin: FECHA_FIN },
+    undefined,
     supabase as any,
   );
 
@@ -117,6 +118,28 @@ Deno.test("returns slots given only fecha_inicio/fecha_fin (no modalidad, no zon
   // Must not return an error
   assertEquals(result.error, undefined, "Must not return an error key");
   assertExists(result, "Result must be a non-null object");
+});
+
+// Regression guard: the agentic loop dispatches tools as fn(input, context).
+// The supabaseOverride MUST live in the 3rd position so the context object never
+// gets mistaken for a Supabase client (would cause "supabase.from is not a function").
+Deno.test("dispatcher arity: context in 2nd arg is ignored, override in 3rd is used", async () => {
+  Deno.env.set("SUPABASE_URL", "https://fake.supabase.co");
+  Deno.env.set("SUPABASE_SERVICE_ROLE_KEY", "fake-key");
+
+  const state: DisponibilidadMockState = { feriados: [], excepciones: [], citas: [] };
+  const supabase = makeMockSupabase(state);
+
+  // Mirror exactly how index.ts calls it: (tool.input, context)
+  const context = { senderNumber: "+593900000000", conversationId: "test-conv" };
+  const raw = await executeConsultarDisponibilidad(
+    { fecha_inicio: FECHA_INICIO, fecha_fin: FECHA_FIN },
+    context as any,
+    supabase as any,
+  );
+
+  const result = JSON.parse(raw);
+  assertEquals(result.error, undefined, "Context object must not be treated as the Supabase client");
 });
 
 Deno.test("returned day objects have { dia_semana, horarios, tag } shape", async () => {
@@ -132,6 +155,7 @@ Deno.test("returned day objects have { dia_semana, horarios, tag } shape", async
   const supabase = makeMockSupabase(state);
   const raw = await executeConsultarDisponibilidad(
     { fecha_inicio: FECHA_INICIO, fecha_fin: FECHA_FIN },
+    undefined,
     supabase as any,
   );
 
@@ -174,6 +198,7 @@ Deno.test("virtual_only excepcion surfaces as tag: virtual_only", async () => {
   const supabase = makeMockSupabase(state);
   const raw = await executeConsultarDisponibilidad(
     { fecha_inicio: "2026-06-15", fecha_fin: "2026-06-15" },
+    undefined,
     supabase as any,
   );
 
@@ -204,6 +229,7 @@ Deno.test("missing fecha_inicio returns error", async () => {
   const supabase = makeMockSupabase(state);
   const raw = await executeConsultarDisponibilidad(
     {} as any,
+    undefined,
     supabase as any,
   );
 
