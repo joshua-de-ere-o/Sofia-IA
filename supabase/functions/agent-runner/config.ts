@@ -12,7 +12,7 @@ export type ServicioCategoria =
   | 'taller' | 'derivacion' | 'complementario';
 
 export type ServicioModalidad = 'presencial' | 'virtual';
-export type ServicioZona = 'sur' | 'norte' | 'valle' | 'domicilio' | 'virtual' | 'santo_domingo';
+export type ServicioZona = 'sur' | 'norte' | 'domicilio' | 'virtual' | 'santo_domingo';
 
 export type Servicio = {
   id: string;

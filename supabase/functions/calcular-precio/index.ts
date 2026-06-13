@@ -9,7 +9,7 @@ const CATALOG = {
   trimestral: 90
 };
 
-const ZONAS_VALIDAS = ["sur", "norte", "virtual", "valle", "domicilio"];
+const ZONAS_VALIDAS = ["sur", "norte", "virtual", "domicilio"];
 
 Deno.serve(async (req: Request) => {
   if (req.method === 'OPTIONS') {
@@ -60,11 +60,6 @@ Deno.serve(async (req: Request) => {
       precio_base = 40;
       precio_total = 40;
       ajuste_zona = 0;
-    } else {
-      if (zona === 'valle') {
-        ajuste_zona = 5;
-        precio_total += ajuste_zona;
-      }
     }
 
     if (zona === 'sur') {

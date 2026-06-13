@@ -18,7 +18,7 @@ export { getToolLatencyLabel } from "./latency.ts";
  */
 
 // Derived from lib/catalog/zonas.json — must stay in sync (T-05 parity test enforces this).
-const ZONAS_VALIDAS = ["sur", "norte", "virtual", "valle", "domicilio", "santo_domingo"];
+const ZONAS_VALIDAS = ["sur", "norte", "virtual", "domicilio", "santo_domingo"];
 
 /**
  * Calcula precio y adelanto de forma 100% determinística (sin red, sin auth).
@@ -61,9 +61,6 @@ export async function executeCalcularPrecio(args: any): Promise<string> {
     precio_total = 40;
     ajuste_zona = 0;
     requiere_adelanto = true;
-  } else if (zona === "valle") {
-    ajuste_zona = 5;
-    precio_total += ajuste_zona;
   }
 
   if (zona === "sur") {

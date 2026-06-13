@@ -51,12 +51,6 @@ describe('calcularPrecio — backward compat after catalog refactor', () => {
     expect(r.monto_adelanto).toBe(12.5)
   })
 
-  it('trimestral + valle → precio_total=95, adelanto=47.5', () => {
-    const r = calcularPrecio('trimestral', 'valle')
-    expect(r.precio_total).toBe(95)
-    expect(r.monto_adelanto).toBe(47.5)
-  })
-
   it('any service + domicilio → precio_total=40, monto_adelanto=20', () => {
     const r = calcularPrecio('alimentario_mensual', 'domicilio')
     expect(r.precio_total).toBe(40)

@@ -104,7 +104,6 @@ function formatHora(hora: string): string {
 const ZONA_LABEL: Record<string, string> = {
   sur: "Sur",
   norte: "Norte",
-  valle: "Valle",
   santo_domingo: "Santo Domingo",
 };
 

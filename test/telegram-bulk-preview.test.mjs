@@ -152,14 +152,14 @@ describe('B-1b toolBuscarCitasBulk — empty result: clarification + no pending 
   it('returns clarification message when filter matches zero citas', async () => {
     setAdapterResponse({
       tool: 'buscar_citas_bulk',
-      args: { zona: 'valle', fecha_desde: '2026-12-25', fecha_hasta: '2026-12-31' },
+      args: { zona: 'norte', fecha_desde: '2026-12-25', fecha_hasta: '2026-12-31' },
     })
 
     // citas returns empty array
     mockFrom.mockImplementation((table) => makeBuilder(table, []))
 
     const { POST } = await loadRoute()
-    await POST(makeRequest({ message: { text: 'citas del valle del 25 al 31 diciembre', chat: { id: 999 } } }))
+    await POST(makeRequest({ message: { text: 'citas del norte del 25 al 31 diciembre', chat: { id: 999 } } }))
 
     // No pending row created (REQ-S2-02)
     const pendingInserts = getInserted()['pending_kelly_actions']
