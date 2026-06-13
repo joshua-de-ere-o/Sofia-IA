@@ -97,14 +97,14 @@ function getSupabase() {
  * T-20: 3-way Promise.all for feriados + excepciones_horario + citas (R-AV-04, SC-11).
  * Slot generation delegated to generateAvailability (lib/availability/slot-generator.js).
  */
-export async function executeConsultarDisponibilidad(args: any): Promise<string> {
+export async function executeConsultarDisponibilidad(args: any, supabaseOverride?: ReturnType<typeof getSupabase>): Promise<string> {
   const { fecha_inicio, fecha_fin } = args;
   if (!fecha_inicio || !fecha_fin) {
     return JSON.stringify({ error: "Faltan parámetros: fecha_inicio o fecha_fin" });
   }
 
   try {
-    const supabase = getSupabase();
+    const supabase = supabaseOverride ?? getSupabase();
 
     // T-20: Single parallel fetch for all three data sources (R-AV-04).
     // One query per source; zero extra queries inside the day-iteration loop.
